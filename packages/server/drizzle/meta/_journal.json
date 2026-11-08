@@ -2626,6 +2626,27 @@
       "when": 1792360939360,
       "tag": "0374_onprem_oidc_email_verified",
       "breakpoints": true
+    },
+    {
+      "idx": 375,
+      "version": "7",
+      "when": 1792360939361,
+      "tag": "0375_onprem_agent_usage",
+      "breakpoints": true
+    },
+    {
+      "idx": 376,
+      "version": "7",
+      "when": 1792360939362,
+      "tag": "0376_onprem_agent_usage_placement",
+      "breakpoints": true
+    },
+    {
+      "idx": 377,
+      "version": "7",
+      "when": 1792360939363,
+      "tag": "0377_onprem_agent_usage_received_index",
+      "breakpoints": true
     }
   ]
 }

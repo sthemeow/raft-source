@@ -58,3 +58,23 @@ test("unusable reports leave the fields off", () => {
   noteTurnTokenUsage(gemini, { kind: "telemetry", name: "rate_limits", source: "claude_result_usage", attrs: { inputTokens: 1 } });
   assert.deepEqual(turnTokenTraceAttrs(gemini), {});
 });
+
+test("Codex reasoning is counted per turn only when both baseline and current usage exist", () => {
+  const acc = createTurnTokenAccumulator();
+  noteTurnTokenUsage(acc, usage("codex_thread_token_usage_updated", {
+    inputTokens: 130, cachedInputTokens: 50, outputTokens: 60, reasoningOutputTokens: 20,
+    lastInputTokens: 30, lastCachedInputTokens: 10, lastOutputTokens: 10, lastReasoningOutputTokens: 4,
+  }));
+  noteTurnTokenUsage(acc, usage("codex_thread_token_usage_updated", {
+    inputTokens: 150, cachedInputTokens: 60, outputTokens: 70, reasoningOutputTokens: 25,
+    lastInputTokens: 20, lastCachedInputTokens: 10, lastOutputTokens: 10, lastReasoningOutputTokens: 5,
+  }));
+  assert.deepEqual(turnTokenTraceAttrs(acc), { input_tokens: 30, output_tokens: 20, cache_read_tokens: 20, reasoning_output_tokens: 9 });
+
+  const missingBaseline = createTurnTokenAccumulator();
+  noteTurnTokenUsage(missingBaseline, usage("codex_thread_token_usage_updated", {
+    inputTokens: 130, cachedInputTokens: 50, outputTokens: 60, reasoningOutputTokens: 20,
+    lastInputTokens: 30, lastCachedInputTokens: 10, lastOutputTokens: 10,
+  }));
+  assert.deepEqual(turnTokenTraceAttrs(missingBaseline), { input_tokens: 20, output_tokens: 10, cache_read_tokens: 10 });
+});

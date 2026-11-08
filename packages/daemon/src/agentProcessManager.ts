@@ -231,7 +231,7 @@ import {
   runtimeTraceCounterAttrs,
   type RuntimeTraceCounters,
 } from "./runtimeCommunicationTrace";
-import { noteTurnTokenUsage } from "./runtimeTurnTokens";
+import { noteTurnTokenUsage, turnTokenCounts, type TurnTokenCounts } from "./runtimeTurnTokens";
 import { resolveRaftHome, resolveRaftHomePath } from "./raftHome";
 import {
   applyStandingPromptUpdate,
@@ -833,6 +833,7 @@ interface AgentProcess {
   /** task #1114: stdin writes since the last runtime consumption signal (observation only). */
   deliveryConsumption: DeliveryConsumptionWatch;
   runtimeTraceSpan: ActiveSpan | null;
+  usageTraceAgentId?: string;
   runtimeTraceCounters: RuntimeTraceCounters;
   /**
    * task #1260 — background tasks this process has started and not yet
@@ -1648,6 +1649,7 @@ export class AgentProcessManager {
     connectionEpochId: null,
   };
   private readonly runtimeProcessGate: RuntimeProcessGate | null;
+  private readonly onTurnUsage: ((turn: { agentId: string; runtime: string; counts: TurnTokenCounts; status: "ok" | "error" | "cancelled" }) => void) | null;
   /** RFC 071: per agent, the start held for the server capability (cancelled by a stop). */
   private readonly capabilityHolds = new Map<string, CapabilityWait>();
   private readonly computerVersion: string | null;
@@ -1732,6 +1734,7 @@ export class AgentProcessManager {
       onAgentWorkingToIdle?: (agentId: string) => void;
       /** RFC 071 outbox: every spawn and rebind first durably records the process as open. */
       runtimeProcessGate?: RuntimeProcessGate;
+      onTurnUsage?: (turn: { agentId: string; runtime: string; counts: TurnTokenCounts; status: "ok" | "error" | "cancelled" }) => void;
     },
   ) {
     this.slockCliPath = opts.slockCliPath ?? "";
@@ -1751,6 +1754,7 @@ export class AgentProcessManager {
     this.daemonVersion = opts.daemonVersion?.trim() || null;
     this.daemonInstanceId = opts.daemonInstanceId?.trim() || null;
     this.runtimeProcessGate = opts.runtimeProcessGate ?? null;
+    this.onTurnUsage = opts.onTurnUsage ?? null;
     this.computerVersion = opts.computerVersion?.trim() || null;
     this.workerUrl = opts.workerUrl?.trim() || null;
     this.fetchImpl = opts.fetchImpl ?? (daemonFetch as FetchLike);
@@ -8750,6 +8754,7 @@ export class AgentProcessManager {
   ): ActiveSpan {
     if (ap.runtimeTraceSpan) return ap.runtimeTraceSpan;
     ap.runtimeTraceCounters = createRuntimeTraceCounters();
+    ap.usageTraceAgentId = agentId;
 
     const messageControl = this.runtimeProfileTurnControlFromMessages(messages);
     if (messageControl) {
@@ -8801,6 +8806,12 @@ export class AgentProcessManager {
     attrs: { outcome: RuntimeTurnTraceOutcome } & Record<string, unknown>,
   ) {
     if (!ap.runtimeTraceSpan) return;
+    const agentId = ap.usageTraceAgentId;
+    ap.usageTraceAgentId = undefined;
+    if (agentId && this.onTurnUsage) {
+      try { this.onTurnUsage({ agentId, runtime: ap.config.runtime, counts: turnTokenCounts(ap.runtimeTraceCounters.tokens), status }); }
+      catch (error) { logger.warn(`[Usage] Unable to capture a turn (${error instanceof Error ? error.name : "unknown"})`); }
+    }
     ap.runtimeTraceSpan.end(status, { attrs });
     ap.runtimeTraceSpan = null;
   }

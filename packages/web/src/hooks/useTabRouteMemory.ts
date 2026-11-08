@@ -18,6 +18,7 @@ export function classifyRouteForTab(pathname: string, pathBase: string | null): 
   if (rest.startsWith("/dm/")) return "chat";
   if (rest === "/threads" || rest.startsWith("/threads/")) return "chat";
   if (rest === "/tasks" || rest.startsWith("/tasks/")) return "tasks";
+  if (rest === "/usage" || rest.startsWith("/usage/")) return "usage";
   if (rest === "/saved" || rest.startsWith("/saved/")) return "chat";
   // /search is its own rail mode (task #311). It is intentionally NOT
   // memorized — selectRailMode("search") always lands on a fresh /search,

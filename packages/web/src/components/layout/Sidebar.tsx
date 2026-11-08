@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useIntl } from "react-intl";
 import type { MessageId } from "../../i18n/messages";
-import { Archive, ArrowRightLeft, Plus, Trash2, ChevronRight, ChevronDown, ChevronLeft, User, MessageSquare, Monitor, Bot, X, Pencil, Bookmark, FileText, BookOpenText, Network, Search, Pin, PinOff, Square, RotateCcw, Play, Bell, BellOff, AtSign, Building2, Activity, Languages, GitBranch, Type, CreditCard, Shield, Link2, BadgeInfo, Blocks, Check, FlaskConical, KeyRound, FolderInput, FolderPlus } from "lucide-react";
+import { Archive, ArrowRightLeft, Plus, Trash2, ChevronRight, ChevronDown, ChevronLeft, User, MessageSquare, Monitor, Bot, X, Pencil, Bookmark, FileText, BookOpenText, Network, Search, Pin, PinOff, Square, RotateCcw, Play, Bell, BellOff, AtSign, Building2, Activity, Languages, GitBranch, ChartNoAxesCombined, Type, CreditCard, Shield, Link2, BadgeInfo, Blocks, Check, FlaskConical, KeyRound, FolderInput, FolderPlus } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -3569,6 +3569,7 @@ export default function Sidebar({ mobileInline, hideTitle = false }: SidebarProp
     focusFirstUnreadInboxItem();
   }, [focusFirstUnreadInboxItem, nav]);
   const openMembersGraph = useCallback(() => navigate(`${pathBase}/members/graph`), [navigate, pathBase]);
+  const openUsage = useCallback(() => navigate(`${pathBase}/usage`), [navigate, pathBase]);
 
   // Stryker disable all: pre-existing empty-computer state is outside the workspace mutation corpus.
   const emptyComputersContent = Object.keys(machineNames).length === 0
@@ -4316,6 +4317,10 @@ export default function Sidebar({ mobileInline, hideTitle = false }: SidebarProp
           ) : (
             <>
               {/* People tab: Agents, Humans, Computers */}
+              {mobileInline && server?.role !== "guest" && <SidebarItem onClick={openUsage} className="text-left">
+                <SidebarItemIcon><ChartNoAxesCombined /></SidebarItemIcon>
+                {formatMessage({ id: "layout.leftRail.tabUsage" })}
+              </SidebarItem>}
               <SidebarItem
                 active={location.pathname === `${pathBase}/members/graph`}
                 onClick={openMembersGraph}

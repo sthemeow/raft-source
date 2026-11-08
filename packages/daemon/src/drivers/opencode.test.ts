@@ -806,6 +806,26 @@ test("parseLine: tool-calls step_finish is an internal boundary, final stop ends
   })), [{ kind: "turn_end", sessionId: "ses_turn" }]);
 });
 
+test("parseLine: OpenCode step usage is a per-generation observation with its message identity", () => {
+  const driver = new OpenCodeDriver();
+  driver.parseLine(JSON.stringify({ type: "step_start", sessionID: "ses_usage", part: { type: "step-start" } }));
+  const actual = driver.parseLine(JSON.stringify({
+    type: "step_finish", sessionID: "ses_usage",
+    part: { messageID: "msg_1", reason: "tool-calls", tokens: { input: 51, output: 7, reasoning: 2, cache: { read: 10, write: 0 } } },
+  }));
+  assert.deepEqual(actual, [{
+    kind: "telemetry", name: "token_usage", source: "opencode_step_finish_usage",
+    usageKind: "per_generation", sessionId: "ses_usage",
+    attrs: { messageId: "msg_1", attribution: "unverified", input_tokens: 51, output_tokens: 7, reasoning_tokens: 2, cache_read_tokens: 10, cache_write_tokens: 0 },
+  }]);
+  assert.deepEqual(driver.parseLine(JSON.stringify({
+    type: "step_finish", sessionID: "ses_usage", part: { reason: "tool-calls", tokens: { input: 12 } },
+  })), [], "usage without a correlatable message is not emitted");
+  assert.deepEqual(driver.parseLine(JSON.stringify({
+    type: "step_finish", sessionID: "ses_usage", part: { messageID: "msg_bad", reason: "tool-calls", tokens: { input: -1, output: "11" } },
+  })), [], "invalid counts are not treated as observations");
+});
+
 test("parseLine: error event has no part wrapper", () => {
   const driver = new OpenCodeDriver();
   const events = driver.parseLine(JSON.stringify({

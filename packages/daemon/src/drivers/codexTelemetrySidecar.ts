@@ -41,6 +41,7 @@ function parseTokenUsageTelemetry(message: JsonRpcMessage): ParsedEvent | null {
     lastInputTokens: finiteNumber(last?.inputTokens),
     lastCachedInputTokens: finiteNumber(last?.cachedInputTokens),
     lastOutputTokens: finiteNumber(last?.outputTokens),
+    lastReasoningOutputTokens: finiteNumber(last?.reasoningOutputTokens),
     modelContextWindow,
     cachedInputRatio: ratio(cachedInputTokens, inputTokens),
     contextUtilization: ratio(totalTokens, modelContextWindow),

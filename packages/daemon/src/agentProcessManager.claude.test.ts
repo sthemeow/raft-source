@@ -236,6 +236,7 @@ async function withManager(
     sessionReadyDeliveryRetryMs?: number;
     sessionReadyDeliveryRetrySchedulerFactory?: () => RuntimeNotificationState;
     appInboxForAgent?: (agentId: string) => AgentAppInboxStore;
+    onTurnUsage?: ConstructorParameters<typeof AgentProcessManager>[2]["onTurnUsage"];
   } = {},
 ): Promise<void> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "slock-claude-apm-test-"));
@@ -254,6 +255,7 @@ async function withManager(
       daemonInstanceId: options.daemonInstanceId,
       sessionReadyDeliveryRetryMs: options.sessionReadyDeliveryRetryMs,
       appInboxForAgent: options.appInboxForAgent,
+      onTurnUsage: options.onTurnUsage,
     },
   );
   setSessionReadyDeliveryRetrySchedulerFactoryForTesting(options.sessionReadyDeliveryRetrySchedulerFactory ?? null);
@@ -269,6 +271,19 @@ async function withManager(
 function getProcess(manager: AgentProcessManager, agentId: string): any {
   return (manager as any).agents.get(agentId);
 }
+
+test("turn usage callback receives only the completed turn once", async () => {
+  const turns: unknown[] = [];
+  await withManager(async ({ manager }) => {
+    await manager.startAgent("agent-1", makeConfig({ sessionId: "session-1" }));
+    const ap = getProcess(manager, "agent-1");
+    (manager as any).startRuntimeTrace("agent-1", ap, "test", []);
+    (manager as any).recordRuntimeTelemetry("agent-1", ap, { kind: "telemetry", name: "token_usage", source: "claude_result_usage", attrs: { inputTokens: 12, outputTokens: 4, cachedInputTokens: 8, cacheCreationInputTokens: 1 } });
+    (manager as any).endRuntimeTrace(ap, "ok", { outcome: "test" });
+    (manager as any).endRuntimeTrace(ap, "ok", { outcome: "test" });
+    assert.deepEqual(turns, [{ agentId: "agent-1", runtime: "claude", status: "ok", counts: { input: 12, output: 4, cacheRead: 8, cacheWrite: 1 } }]);
+  }, { onTurnUsage: (turn) => turns.push(turn) });
+});
 
 function makeSessionReadyDeliveryRetryScheduler() {
   const clock = new FakeClock();

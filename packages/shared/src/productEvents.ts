@@ -147,7 +147,7 @@ const JOURNEY_REVIEW = "nova; reviewed by Vivian/meichen (2026-10-05)";
 // send it too, with the same values (agreed with Lagoon, #proj-mobile:5a02b7a8):
 // `surface` names the kind of entry, while `source` and `$device_type` tell
 // the platform, so a native tablet's side bar is `rail` like the web's.
-export const NAV_DESTINATIONS = ["home", "activity", "search", "saved", "tasks", "members", "computers", "settings"] as const;
+export const NAV_DESTINATIONS = ["home", "activity", "search", "saved", "tasks", "members", "usage", "computers", "settings"] as const;
 /**
  * mobile_home_shortcuts: the Search / Activity / Saved rows at the top of the
  * phone's Home. sidebar: the desktop channel sidebar (Saved). keyboard_shortcut: ⌘K / Ctrl+K.

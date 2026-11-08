@@ -19,6 +19,7 @@ import { Router, type Response, type Router as RouterType } from "express";
 import type { Server as SocketServer } from "socket.io";
 import {
   AGENT_MIGRATION_TERMINAL_FAILURE_CODES,
+  agentUsageBatchSchema,
   currentDate,
   type AgentMigrationControlManifest,
   type AgentMigrationSourceQuiesceReceipt,
@@ -83,6 +84,7 @@ import {
   emitAgentMigrationUpdatedByRef,
 } from "../services/agentMigrationRealtime";
 import { sendJsonServerError } from "./errorResponse";
+import { AgentUsageIngestError, ingestAgentUsageBatch } from "../services/agentUsageIngestService";
 
 export const internalComputerRouter: RouterType = Router();
 
@@ -121,6 +123,33 @@ async function computerMigrationContext(req: { serverId?: string; machineId?: st
   if (!serverId || !machineId) return null;
   return { serverId, machineId };
 }
+
+internalComputerRouter.get("/agent-usage/context", async (req, res) => {
+  try {
+    const ctx = await computerMigrationContext(req);
+    if (!ctx || !req.computerId) return res.status(403).json({ error: "computer_not_attached" });
+    return res.status(200).json({ serverId: ctx.serverId, computerId: req.computerId, machineId: ctx.machineId });
+  } catch (error) {
+    return sendJsonServerError(req, res, { error: "Failed to resolve computer identity", logPrefix: "[Computer usage]", err: error });
+  }
+});
+
+internalComputerRouter.post("/agent-usage", async (req, res) => {
+  const parsed = agentUsageBatchSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "invalid_usage_batch" });
+  try {
+    const ctx = await computerMigrationContext(req);
+    if (!ctx || !req.computerId) return res.status(403).json({ error: "computer_not_attached" });
+    const result = await ingestAgentUsageBatch({ ...ctx, computerId: req.computerId, batch: parsed.data });
+    return res.status(200).json(result);
+  } catch (error) {
+    if (error instanceof AgentUsageIngestError) {
+      const status = error.code === "identity_mismatch" || error.code === "agent_not_authorized" ? 403 : 409;
+      return res.status(status).json({ error: error.code, recordId: error.recordId, ...(error.code === "timestamp_in_future" || error.code === "agent_not_authorized" ? { serverTime: new Date().toISOString() } : {}) });
+    }
+    return sendJsonServerError(req, res, { error: "Failed to ingest usage", logPrefix: "[Computer usage]", err: error });
+  }
+});
 
 async function targetImportContext(req: { serverId?: string; machineId?: string; computerId?: string }) {
   const ctx = await computerMigrationContext(req);

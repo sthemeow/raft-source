@@ -11,11 +11,12 @@ type TelemetryEvent = Extract<ParsedEvent, { kind: "telemetry" }>;
 export interface TurnTokenCounts {
   input?: number;
   output?: number;
+  reasoning?: number;
   cacheRead?: number;
   cacheWrite?: number;
 }
 
-const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+const TOKEN_FIELDS = ["input", "output", "reasoning", "cacheRead", "cacheWrite"] as const;
 
 export interface TurnTokenAccumulator {
   /** Sum of per-call or per-turn reports. */
@@ -51,7 +52,8 @@ function codexCounts(attrs: TelemetryEvent["attrs"], prefix: "" | "last"): TurnT
   const cached = num(attrs, key("cachedInputTokens"));
   const output = num(attrs, key("outputTokens"));
   if (input === undefined || cached === undefined || output === undefined) return null;
-  return counts(input - cached, output, cached, undefined);
+  const reasoning = num(attrs, key("reasoningOutputTokens"));
+  return { ...counts(input - cached, output, cached, undefined), ...(reasoning !== undefined ? { reasoning } : {}) };
 }
 
 function addCounts(into: TurnTokenCounts, next: TurnTokenCounts): void {
@@ -116,6 +118,7 @@ export function turnTokenTraceAttrs(acc: TurnTokenAccumulator): Record<string, n
   return {
     ...(tokens.input !== undefined ? { input_tokens: tokens.input } : {}),
     ...(tokens.output !== undefined ? { output_tokens: tokens.output } : {}),
+    ...(tokens.reasoning !== undefined ? { reasoning_output_tokens: tokens.reasoning } : {}),
     ...(tokens.cacheRead !== undefined ? { cache_read_tokens: tokens.cacheRead } : {}),
     ...(tokens.cacheWrite !== undefined ? { cache_write_tokens: tokens.cacheWrite } : {}),
   };

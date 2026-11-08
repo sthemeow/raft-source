@@ -7,6 +7,7 @@ import {
   Activity,
   ArrowUpRight,
   BookOpenText,
+  ChartNoAxesCombined,
   CheckSquare,
   CircleHelp,
   MessageSquare,
@@ -257,6 +258,7 @@ export function LeftRail({ hidden, topBar = false, publicProjection }: LeftRailP
       chat: select("chat"),
       tasks: select("tasks"),
       members: select("members"),
+      usage: select("usage"),
       computers: select("computers"),
       settings: select("settings"),
     };
@@ -479,6 +481,7 @@ export function LeftRail({ hidden, topBar = false, publicProjection }: LeftRailP
         />
         <RailTabButton icon={<CheckSquare size={18} />} label={formatMessage({ id: "layout.leftRail.tabTasks" })} active={railMode === "tasks"} onClick={railModeSelectors.tasks} testId="left-rail-tab-tasks" />
         {!isGuest && <RailTabButton icon={<Users size={18} />} label={formatMessage({ id: "layout.leftRail.tabMembers" })} active={railMode === "members"} onClick={railModeSelectors.members} testId="left-rail-tab-members" />}
+        {!isGuest && <RailTabButton icon={<ChartNoAxesCombined size={18} />} label={formatMessage({ id: "layout.leftRail.tabUsage" })} active={railMode === "usage"} onClick={railModeSelectors.usage} testId="left-rail-tab-usage" />}
         {!isGuest && <RailTabButton
           icon={<Monitor size={18} />}
           label={formatMessage({ id: "layout.leftRail.tabComputers" })}

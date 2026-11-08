@@ -114,6 +114,7 @@ import { RuntimeModelSourceCache, type RuntimeModelCacheRead } from "./runtimeMo
 import { RAFT_HOME_ENV, SLOCK_HOME_ENV, listLegacyRaftStatePaths, resolveRaftHome, resolveRaftHomePath } from "./raftHome";
 import { regenerateExistingOpencliWrappers } from "./drivers/cliTransport";
 import { daemonFetch } from "./daemonFetch";
+import { AgentUsageReporter } from "./agentUsageReporter";
 import {
   buildProviderProbeResultMessage,
   buildUnclaimedProviderProbeResult,
@@ -1844,6 +1845,7 @@ export class DaemonCore {
   private observedServerId: string | null = null;
   private observedMachineId: string | null = null;
   private authenticatedMachineContext: { serverId: string; machineId: string } | null = null;
+  private readonly agentUsageReporter: AgentUsageReporter;
   private scopedAppStorageFactory: ScopedAppStorageFactory | null = null;
   private scopedAppStorageObserver: ScopedAppStorageObserver | null = null;
   private machineContextConflict = false;
@@ -1902,6 +1904,7 @@ export class DaemonCore {
     let connection!: DaemonConnection;
 
     this.agentsDataDir = options.dataDir ?? resolveRaftHomePath("agents", this.slockHome);
+    this.agentUsageReporter = new AgentUsageReporter({ serverUrl: options.serverUrl, apiKey: options.apiKey, dataDir: this.agentsDataDir, expectedServerId: options.machineOwnerProvenance?.kind === "managed_computer_runner" ? options.machineOwnerProvenance.serverId : undefined, owner: () => this.machineContextConflict ? null : this.authenticatedMachineContext });
     const traceUploadDisabled = process.env.SLOCK_DAEMON_TRACE_UPLOAD_DISABLED === "1";
     const agentManagerOptions = {
       dataDir: this.agentsDataDir,
@@ -1918,6 +1921,7 @@ export class DaemonCore {
       appInboxForAgent: (agentId: string) => this.getAgentAppInbox(agentId),
       // Lazy: the local app runtime is created after the agent manager.
       onAgentWorkingToIdle: (agentId: string) => this.localScheduleRuntime?.onAgentWorkingToIdle(agentId),
+      onTurnUsage: (turn: Parameters<AgentUsageReporter["record"]>[0]) => this.agentUsageReporter.record(turn),
       // RFC 071 outbox: every spawn/rebind first durably records the process as open.
       runtimeProcessGate: {
         openProcess: (agentId: string, processInstanceId: string, spawnLaunchId: string | null) =>
@@ -2231,6 +2235,7 @@ export class DaemonCore {
       lifecycleSpan.addEvent("daemon.machine_lock.acquired", { machine_dir_present: true });
     }
     try {
+      this.agentUsageReporter.start();
       this.connection.connect();
     } catch (err) {
       lifecycleSpan?.end("error", { attrs: { error_class: errorClassOf(err) } });
@@ -2240,6 +2245,7 @@ export class DaemonCore {
       this.processMemoryReporter = null;
       this.machineLock.release();
       this.machineLock = null;
+      void this.agentUsageReporter.stop().catch(() => {});
       throw err;
     }
     lifecycleSpan?.end("ok");
@@ -2281,6 +2287,8 @@ export class DaemonCore {
       await this.agentManager.stopAll();
       span.addEvent("daemon.agents.stopped");
     } finally {
+      try { await this.agentUsageReporter.stop(); }
+      catch { logger.warn("[Usage] Unable to close the local usage queue"); }
       this.runtimeOutcomeOutbox.stop();
       if (this.connection.connected) {
         const lifecycleAcks = this.options.getComputerLifecycleAcks?.()
@@ -3858,6 +3866,7 @@ export class DaemonCore {
       machineId: context.machineId,
       serverId: context.serverId,
     };
+    void this.agentUsageReporter.tick();
     this.observedMachineId = context.machineId;
     this.observedServerId = context.serverId;
     this.scopedAppStorageObserver = createScopedAppStorageObserver({

@@ -1008,6 +1008,64 @@ export const agents = pgTable("agents", {
   index("idx_agents_created_at").on(t.createdAt),
 ]);
 
+// Agent usage is operational telemetry, not an invoice. A null count is
+// unavailable, and `complete` covers this observation rather than history.
+// The computer ID is a historical provenance snapshot: it must survive a
+// computer being removed or an agent moving to another machine.
+export const agentUsageRecords = pgTable("agent_usage_records", {
+  id: uuid("id").primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  computerId: uuid("computer_id").notNull(),
+  runtime: text("runtime", { enum: ["claude", "codex", "opencode"] }).notNull(),
+  endedAt: timestamp("ended_at", { withTimezone: true }).notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  complete: boolean("complete").notNull(),
+  input: bigint("input_tokens", { mode: "number" }),
+  output: bigint("output_tokens", { mode: "number" }),
+  cacheRead: bigint("cache_read_tokens", { mode: "number" }),
+  cacheWrite: bigint("cache_write_tokens", { mode: "number" }),
+  reasoning: bigint("reasoning_tokens", { mode: "number" }),
+}, (t) => [
+  index("idx_agent_usage_records_server_agent_time").on(t.serverId, t.agentId, t.endedAt),
+  index("idx_agent_usage_records_server_agent_received").on(t.serverId, t.agentId, t.receivedAt),
+  index("idx_agent_usage_records_server_time").on(t.serverId, t.endedAt),
+  check("agent_usage_records_runtime", sql`${t.runtime} in ('claude', 'codex', 'opencode')`),
+  check("agent_usage_records_nonnegative", sql`(${t.input} is null or ${t.input} >= 0) and (${t.output} is null or ${t.output} >= 0) and (${t.cacheRead} is null or ${t.cacheRead} >= 0) and (${t.cacheWrite} is null or ${t.cacheWrite} >= 0) and (${t.reasoning} is null or ${t.reasoning} >= 0)`),
+  check("agent_usage_records_complete_observed", sql`not ${t.complete} or ${t.input} is not null or ${t.output} is not null or ${t.cacheRead} is not null or ${t.cacheWrite} is not null or ${t.reasoning} is not null`),
+]);
+
+// A bounded computer-level warning is intentionally conservative: it means
+// coverage may be incomplete and cannot prove how many distinct turns were
+// lost or whether a later retry repaired them.
+export const agentUsageGaps = pgTable("agent_usage_gaps", {
+  id: uuid("id").primaryKey(),
+  serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+  computerId: uuid("computer_id").notNull(),
+  firstEndedAt: timestamp("first_ended_at", { withTimezone: true }).notNull(),
+  lastEndedAt: timestamp("last_ended_at", { withTimezone: true }).notNull(),
+  failedAttempts: bigint("failed_attempts", { mode: "number" }).notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index("idx_agent_usage_gaps_server_computer_time").on(t.serverId, t.computerId, t.firstEndedAt),
+  check("agent_usage_gaps_range", sql`${t.firstEndedAt} <= ${t.lastEndedAt} and ${t.failedAttempts} > 0`),
+]);
+
+// Placement boundaries are recorded by a database trigger for every path that
+// changes agent.machineId or archives/restores an agent, including auto-assign.
+export const agentUsagePlacements = pgTable("agent_usage_placements", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  machineId: uuid("machine_id").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+}, (t) => [
+  index("idx_agent_usage_placements_agent_time").on(t.serverId, t.agentId, t.startedAt),
+  uniqueIndex("idx_agent_usage_placements_agent_open").on(t.agentId).where(sql`${t.endedAt} is null`),
+  check("agent_usage_placements_range", sql`${t.endedAt} is null or ${t.startedAt} <= ${t.endedAt}`),
+]);
+
 // Agent archive: one row per archived (soft-deleted) agent that has a
 // workspace decision. Agents deleted before archive existed have no row.
 export const agentArchives = pgTable("agent_archives", {

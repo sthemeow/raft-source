@@ -407,6 +407,7 @@ export const ROUTE_AUTHORITY_CLASSIFICATION: readonly RouteClassification[] = [
   { route: "POST /internal/computer/agent-migrations/by-id/:migrationId/resumable/upload-complete", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); no human Server authority" },
   { route: "POST /internal/computer/agent-migrations/by-id/:migrationId/transport-lost", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); no human Server authority" },
   { route: "POST /internal/computer/preflight", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); no human Server authority" },
+  { route: "POST /internal/computer/agent-usage", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); agent ownership checked on ingestion" },
   { route: "POST /internal/computer/probes/:probeId/materialize", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); no human Server authority" },
   { route: "POST /internal/computer/runners/:agentId/credentials", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); no human Server authority" },
   { route: "POST /internal/computer/runners/:agentId/provider-connection", bucket: "nonHuman", reason: "Computer principal (routeAuthPolicy registry); no human Server authority" },

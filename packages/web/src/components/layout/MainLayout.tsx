@@ -44,6 +44,7 @@ import { shouldSuppressAnnouncements, useOnboardingAnnouncementGateStore } from 
 import { mainLayoutRealtimeBridgeDriver } from "../../store/mainLayoutRealtimeBridgeDriver";
 import { useMainLayoutRealtimeBridge } from "../../store/socketBridge";
 import Sidebar from "./Sidebar";
+import { UsagePage } from "../usage/UsagePage";
 import { isHostShell } from "../../embed";
 import { useEmbedParamsKeeper } from "../../hooks/useEmbedParamsKeeper";
 import { LeftRail } from "./LeftRail";
@@ -1863,6 +1864,7 @@ export default function MainLayout() {
   // by reusing the Sidebar slot to host MessageSearchPage and rendering the
   // picked entity in the routes container via SearchContentRoute.
   const isTasksRoute = path === `${pathBase}/tasks` || path.startsWith(`${pathBase}/tasks/`);
+  const isUsageRoute = path === `${pathBase}/usage` || path.startsWith(`${pathBase}/usage/`);
   const isSearchRoute = path === `${pathBase}/search` || path.startsWith(`${pathBase}/search/`);
   // Inbox (Activity) is the second content master/detail route. It reuses the
   // exact same slot store, URL sync, column assembly, widths, and resize
@@ -1901,7 +1903,7 @@ export default function MainLayout() {
     searchMasterDetail && threadOpenForLayout && !!searchSlotKind && searchSlotKind !== "thread";
   const contentRouteProfileOverlayOpen = searchMasterDetail && profileOpenForLayout;
   const searchColTwoCompact = contentRouteThreadOverlayOpen || contentRouteProfileOverlayOpen;
-  const hideSidebar = isTasksRoute || (isContentRoute && !searchMasterDetail);
+  const hideSidebar = isTasksRoute || isUsageRoute || (isContentRoute && !searchMasterDetail);
   const isMobileTabRoot = mobileShowSidebarInline || (!isDesktop && isTasksRoute);
   // iOS-standalone chrome buckets (Raft Design System › NavBar): a tab root's
   // top bar is the frame (yellow in light, #0d0d0b in dark), a pushed detail's
@@ -2130,6 +2132,7 @@ export default function MainLayout() {
                 <Route path="inbox" element={<LegacyThreadsRedirect />} />
                 <Route path="threads" element={<LegacyThreadsRedirect />} />
                 <Route path="tasks" element={<TasksRoute />} />
+                <Route path="usage" element={<UsagePage />} />
                 <Route path="saved" element={<SavedRoute />} />
                 <Route path="release-notes" element={<ReleaseNotesRoute />} />
                 {/* Legacy /workspace from the removed Workspace grid layout. */}

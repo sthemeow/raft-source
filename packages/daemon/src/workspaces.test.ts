@@ -2,12 +2,23 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { AGENT_USAGE_OUTBOX_DIR } from "./agentUsageOutbox";
 import {
   deleteWorkspaceDirectory,
   resolveWorkspaceDirectoryPath,
   scanWorkspaceDirectories,
   workspaceDisplayPath,
 } from "./workspaces";
+
+test("the usage queue is not exposed or removed as an agent workspace", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "daemon-usage-workspaces-"));
+  try {
+    await mkdir(path.join(root, AGENT_USAGE_OUTBOX_DIR));
+    await writeFile(path.join(root, AGENT_USAGE_OUTBOX_DIR, "queue"), "retained");
+    assert.deepEqual(await scanWorkspaceDirectories(root), []);
+    assert.equal(await deleteWorkspaceDirectory(root, AGENT_USAGE_OUTBOX_DIR), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("scanWorkspaceDirectories summarizes workspace directories recursively", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "daemon-workspaces-"));

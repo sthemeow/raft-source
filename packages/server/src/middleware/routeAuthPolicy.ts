@@ -392,6 +392,18 @@ export const routeAuthPolicy: readonly RouteAuthPolicyEntry[] = [
   // sk_agent_* still returns 401 invalid_principal.
   // ---------------------------------------------------------------------------
   {
+    method: "POST",
+    path: "/internal/computer/agent-usage",
+    principal: "sk_computer",
+    note: "Computer usage observations; agent ownership checked by the handler",
+  },
+  {
+    method: "GET",
+    path: "/internal/computer/agent-usage/context",
+    principal: "sk_computer",
+    note: "Authenticated attachment identity for usage outbox partitioning",
+  },
+  {
     // task #30 PR-C — Computer lists the runners on its bound server.
     // §12 control-plane whitelist is enforced SERVER-SIDE in the handler
     // (the SELECT projects only safe fields; the raw agents row — incl.

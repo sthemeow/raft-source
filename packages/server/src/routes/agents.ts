@@ -243,6 +243,7 @@ import {
 } from "../services/builtinModelCatalogCompatibility";
 import { MachineCatalogStaleError } from "../services/machineCatalogAuthority";
 import { guardUuidPathParams } from "../lib/uuidPathParams";
+import { getAgentUsageSummary } from "./agentUsage";
 
 export const agentRouter: RouterType = Router();
 
@@ -264,6 +265,7 @@ agentRouter.use(async (req, res, next) => {
   next();
 });
 export const agentAvatarRouter: RouterType = Router();
+agentRouter.get("/usage/summary", getAgentUsageSummary);
 const MAX_AGENT_DESCRIPTION_LENGTH = 3000;
 const KNOWN_REASONING_EFFORT_IDS = new Set<string>(REASONING_EFFORTS.map((effort) => effort.id));
 

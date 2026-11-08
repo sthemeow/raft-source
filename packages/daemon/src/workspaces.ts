@@ -1,6 +1,7 @@
 import { access, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { RUNTIME_OUTCOME_OUTBOX_DIR_NAME } from "./runtimeOutcomeOutbox";
+import { AGENT_USAGE_OUTBOX_DIR } from "./agentUsageOutbox";
 import path from "node:path";
 import type { WorkspaceDirectoryInfo } from "@botiverse/raft-shared";
 import { logger } from "./logger";
@@ -51,7 +52,7 @@ export function resolveWorkspaceDirectoryPath(dataDir: string, directoryName: st
   // ("." and ""), anything above it ("..", "../x"), and any nested path
   // ("nested/agent-1") in a single comparison -- workspace names are agent ids and
   // are always a single segment.
-  if (path.dirname(target) !== root) {
+  if (path.dirname(target) !== root || path.basename(target) === AGENT_USAGE_OUTBOX_DIR) {
     return null;
   }
   return target;
@@ -150,7 +151,7 @@ export async function scanWorkspaceDirectories(dataDir: string): Promise<Workspa
   const results = await Promise.all(
     entries.map(async (entry): Promise<WorkspaceDirectoryInfo | null> => {
       // RFC 071: the runtime-outcome outbox lives beside the workspaces; it is not one.
-      if (!entry.isDirectory() || entry.name === RUNTIME_OUTCOME_OUTBOX_DIR_NAME) {
+      if (!entry.isDirectory() || entry.name === RUNTIME_OUTCOME_OUTBOX_DIR_NAME || entry.name === AGENT_USAGE_OUTBOX_DIR) {
         return null;
       }
 

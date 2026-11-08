@@ -17,7 +17,7 @@ import { resolveSearchOverlayBackground, searchEntryState } from "../components/
 // visible) — same shape as `tasks`. Per stdrc #proj-uiux:c2313b1d task #311
 // 2026-05-25: Search entry promoted to the Rail's first button + opens a
 // fullscreen search page.
-export type RailMode = "search" | "activity" | "chat" | "members" | "computers" | "tasks" | "settings";
+export type RailMode = "search" | "activity" | "chat" | "members" | "usage" | "computers" | "tasks" | "settings";
 
 // Back-compat alias for callers that only care about the chat/members
 // distinction inside the chat-or-members surface (e.g. existing tests).
@@ -34,6 +34,7 @@ function deriveRailModeFromPath(pathname: string, pathBase: string): RailMode {
   if (pathname.startsWith(`${pathBase}/settings`)) return "settings";
   if (pathname.startsWith(`${pathBase}/release-notes`)) return "settings";
   if (pathname === `${pathBase}/tasks` || pathname.startsWith(`${pathBase}/tasks/`)) return "tasks";
+  if (pathname === `${pathBase}/usage` || pathname.startsWith(`${pathBase}/usage/`)) return "usage";
   if (pathname.startsWith(`${pathBase}/computer/`)) return "computers";
   if (pathname.startsWith(`${pathBase}/machine/`)) return "computers"; // legacy
   if (pathname === `${pathBase}/computers` || pathname.startsWith(`${pathBase}/computers/`)) return "computers";
@@ -93,6 +94,7 @@ export function useRailMode() {
     const remembered = readTabMemory(serverSlug, mode);
     const fallback = mode === "chat" ? base
       : mode === "members" ? `${base}/members`
+      : mode === "usage" ? `${base}/usage`
       : mode === "computers" ? `${base}/computers`
       : mode === "tasks" ? `${base}/tasks`
       : `${base}/settings/account`;

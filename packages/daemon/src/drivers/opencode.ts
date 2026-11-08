@@ -33,6 +33,13 @@ interface OpenCodeEvent {
       input?: unknown;
     };
     reason?: string;
+    messageID?: string;
+    tokens?: {
+      input?: unknown;
+      output?: unknown;
+      reasoning?: unknown;
+      cache?: { read?: unknown; write?: unknown };
+    };
   };
   error?: {
     name?: string;
@@ -1152,6 +1159,27 @@ export class OpenCodeDriver implements RuntimeDriver {
         break;
 
       case "step_finish":
+        // A step is one model request, not the whole Raft turn. This event is
+        // best effort: some OpenCode versions omit the last step on stdout.
+        // A concurrent client on the same session can appear in this stream.
+        // Neither an observed event nor its absence proves per-agent usage.
+        if (event.part?.tokens && typeof event.part.messageID === "string") {
+          const token = event.part.tokens;
+          const attrs: Record<string, string | number> = { messageId: event.part.messageID, attribution: "unverified" };
+          for (const [key, value] of Object.entries({
+            input_tokens: token.input,
+            output_tokens: token.output,
+            reasoning_tokens: token.reasoning,
+            cache_read_tokens: token.cache?.read,
+            cache_write_tokens: token.cache?.write,
+          })) {
+            if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) attrs[key] = value;
+          }
+          if (Object.keys(attrs).length > 2) events.push({
+            kind: "telemetry", name: "token_usage", source: "opencode_step_finish_usage",
+            usageKind: "per_generation", sessionId: announced, attrs,
+          });
+        }
         // 1.x ends every reply with a step_finish (reason "stop"); 2.0.27
         // prints one only after tool calls and none for the final reply, so a
         // 2.x turn may end without this event. That is fine for a per_turn
