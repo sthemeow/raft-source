@@ -43,6 +43,7 @@ import {
   validateName,
   type TimeFormatPreference,
 } from "@botiverse/raft-shared";
+import { createPkcePair, isOidcAutoStartEnabled } from "../services/oidcProvider";
 import { getRegistrationBlockedReason } from "../services/registrationPolicy";
 import {
   createAvatarUpload,
@@ -55,8 +56,10 @@ import {
 import {
   assertVerifiedSocialAuthProfile,
   buildAuthorizationUrl,
+  buildOidcVerifierCookie,
   buildSocialAuthCallbackUrl,
   buildStateCookie,
+  clearOidcVerifierCookie,
   clearStateCookie,
   completeNativeAppleMobileOAuthAuthorization,
   completeMobileOAuthProviderCallback,
@@ -64,6 +67,7 @@ import {
   createMobileOAuthStart,
   createSocialAuthCompletion,
   createSocialAuthNonce,
+  readOidcVerifierCookie,
   exchangeProviderCode,
   exchangeSocialAuthCompletion,
   fetchSocialAuthProfile,
@@ -385,19 +389,24 @@ function getAgreementRequestMetadata(req: { ip?: string; get: (name: string) => 
 function socialProfileFromCompletion(provider: NonNullable<ReturnType<typeof getSocialAuthProvider>>, completion: {
   providerUserId?: string;
   providerEmail?: string;
+  providerEmailVerified: boolean | null;
   providerDisplayName?: string;
   providerAvatarUrl?: string;
 }): SocialAuthProfile {
   if (!completion.providerUserId || !completion.providerEmail) {
     throw new Error(`${provider.label} sign-in is missing required identity fields`);
   }
+  if (completion.providerEmailVerified === null) {
+    // Never infer "unverified" from a missing write; fail closed and loudly.
+    throw new Error(`${provider.label} sign-in is missing the email verification claim`);
+  }
   return {
     provider: provider.id,
     providerUserId: completion.providerUserId,
     email: completion.providerEmail,
-    // Completion records are written only after the provider profile passes
-    // assertVerifiedSocialAuthProfile. Do not persist unverified profiles.
-    emailVerified: true,
+    // The provider's stored claim, not an assumption: only a verified claim may
+    // mark the Raft account's email verified.
+    emailVerified: completion.providerEmailVerified,
     displayName: completion.providerDisplayName ?? null,
     avatarUrl: completion.providerAvatarUrl ?? null,
   };
@@ -420,6 +429,9 @@ async function isSocialAuthProviderAvailable(
   platform: featureFlagService.FeatureFlagPlatform,
 ): Promise<boolean> {
   if (!isSocialAuthProviderConfigured(provider.id)) return false;
+  // Native OIDC is enabled for the browser only; desktop is excluded and the
+  // native mobile flow has not been verified against this provider.
+  if (provider.id === "oidc" && platform !== "web") return false;
   return isSocialAuthProviderGateOpen(provider.id, platform);
 }
 
@@ -437,7 +449,7 @@ async function startMobileOAuthResponse(req: Request, res: Response, params: {
 }) {
   const provider = getSocialAuthProvider(params.providerId);
   if (!provider) {
-    res.status(400).json({ code: "provider_invalid", error: "provider must be google, github, or apple" });
+    res.status(400).json({ code: "provider_invalid", error: "provider must be google, github, apple, or oidc" });
     return;
   }
   if (!(await isSocialAuthProviderAvailable(provider, "mobile"))) {
@@ -716,15 +728,21 @@ authRouter.get("/providers", async (req, res) => {
   }
   const platform: featureFlagService.FeatureFlagPlatform = platformParam;
 
-  const providerConfigs = ["google", "github", "apple"]
+  const providerConfigs = ["google", "github", "apple", "oidc"]
     .map((providerId) => getSocialAuthProvider(providerId))
     .filter((provider): provider is NonNullable<typeof provider> => !!provider);
 
-  const providers = await Promise.all(providerConfigs.map(async (provider) => ({
+  const providers = await Promise.all(providerConfigs.map(async (provider) => {
+    const enabled = await isSocialAuthProviderAvailable(provider, platform);
+    return {
       id: provider.id,
       label: provider.label,
-      enabled: await isSocialAuthProviderAvailable(provider, platform),
-    })));
+      enabled,
+      // The client may attempt one silent (prompt=none) start, and only when
+      // the deployment explicitly opted in. Never advertise it otherwise.
+      ...(provider.id === "oidc" ? { autoStart: enabled && isOidcAutoStartEnabled() } : {}),
+    };
+  }));
 
   res.json({ providers });
 });
@@ -958,8 +976,19 @@ authRouter.get("/:provider/start", async (req, res, next) => {
     ...(req.query.linkOnConflict === "1" ? { linkOnConflict: true } : {}),
   });
 
-  res.setHeader("Set-Cookie", buildStateCookie(provider.id, nonce));
-  res.redirect(buildAuthorizationUrl(provider.id, state, "login", nonce));
+  // PKCE is required for OIDC; the verifier stays server-side in a cookie so
+  // it never appears in the authorize URL.
+  const pkce = provider.id === "oidc" ? createPkcePair() : null;
+  const silent = provider.id === "oidc" && req.query.silent === "1";
+
+  res.setHeader(
+    "Set-Cookie",
+    [buildStateCookie(provider.id, nonce), ...(pkce ? [buildOidcVerifierCookie(nonce, pkce.verifier)] : [])],
+  );
+  res.redirect(await buildAuthorizationUrl(provider.id, state, "login", nonce, {
+    ...(pkce ? { codeChallenge: pkce.challenge } : {}),
+    silent,
+  }));
 });
 
 authRouter.post("/:provider/link/start", requireAuth, async (req, res, next) => {
@@ -984,8 +1013,16 @@ authRouter.post("/:provider/link/start", requireAuth, async (req, res, next) => 
     returnTo,
   });
 
-  res.setHeader("Set-Cookie", buildStateCookie(provider.id, nonce));
-  res.json({ url: buildAuthorizationUrl(provider.id, state, "link", nonce) });
+  const pkce = provider.id === "oidc" ? createPkcePair() : null;
+  res.setHeader(
+    "Set-Cookie",
+    [buildStateCookie(provider.id, nonce), ...(pkce ? [buildOidcVerifierCookie(nonce, pkce.verifier)] : [])],
+  );
+  res.json({
+    url: await buildAuthorizationUrl(provider.id, state, "link", nonce, {
+      ...(pkce ? { codeChallenge: pkce.challenge } : {}),
+    }),
+  });
 });
 
 async function handleSocialAuthCallback(req: Request, res: Response, next: NextFunction) {
@@ -1029,7 +1066,8 @@ async function handleSocialAuthCallback(req: Request, res: Response, next: NextF
   }
 
   try {
-    res.setHeader("Set-Cookie", clearStateCookie(provider.id));
+    const oidcNonce = provider.id === "oidc" ? state.nonce : undefined;
+    res.setHeader("Set-Cookie", [clearStateCookie(provider.id, oidcNonce), clearOidcVerifierCookie(oidcNonce)]);
 
     const code = getSocialAuthCallbackParam(req, "code");
     if (!code) {
@@ -1043,9 +1081,30 @@ async function handleSocialAuthCallback(req: Request, res: Response, next: NextF
       return;
     }
 
-    const { accessToken } = await exchangeProviderCode(provider.id, code);
-    const profile = await fetchSocialAuthProfile(provider.id, accessToken, state.nonce);
-    assertVerifiedSocialAuthProfile(profile);
+    const codeVerifier = provider.id === "oidc" ? readOidcVerifierCookie(req.headers.cookie, state.nonce) : null;
+    const { accessToken, idToken } = await exchangeProviderCode(provider.id, code, {
+      ...(codeVerifier ? { codeVerifier } : {}),
+    });
+    const profile = await fetchSocialAuthProfile(provider.id, accessToken, state.nonce, {
+      ...(idToken ? { idToken } : {}),
+    });
+
+    // An existing OIDC link is the credential: sign in on the exact
+    // (issuer, subject) pair without letting the current email claim decide.
+    // A verified email is still required for a new account or a proposed
+    // email-based link, which the paths below already enforce.
+    let linkedOidcUser: Awaited<ReturnType<typeof userService.findLinkedSocialIdentityUser>> = null;
+    if (provider.id === "oidc" && state.mode === "login") {
+      linkedOidcUser = await userService.findLinkedSocialIdentityUser(provider.id, profile.providerUserId);
+    }
+    // An explicit link from Settings is started by a signed-in user and checked
+    // against that user (link_user_mismatch); it does not depend on the email.
+    // Without this, a provider whose email claim is unverified could never
+    // create its first link.
+    const explicitOidcLink = provider.id === "oidc" && state.mode === "link";
+    if (!linkedOidcUser && !explicitOidcLink) {
+      assertVerifiedSocialAuthProfile(profile);
+    }
 
     if (state.mode === "link") {
       if (!state.linkUserId) {
@@ -1063,7 +1122,7 @@ async function handleSocialAuthCallback(req: Request, res: Response, next: NextF
         providerAvatarUrl: profile.avatarUrl,
         providerEmailVerified: profile.emailVerified,
         returnTo,
-      });
+      }, { allowUnverifiedEmail: explicitOidcLink });
 
       res.redirect(buildSocialAuthCallbackUrl({
         provider: provider.id,
@@ -1074,10 +1133,10 @@ async function handleSocialAuthCallback(req: Request, res: Response, next: NextF
       return;
     }
 
-    let user: Awaited<ReturnType<typeof userService.findExistingSocialLoginUser>> = null;
+    let user: Awaited<ReturnType<typeof userService.findExistingSocialLoginUser>> = linkedOidcUser;
     let emailConflict = false;
     try {
-      user = await userService.findExistingSocialLoginUser(profile);
+      if (!linkedOidcUser) user = await userService.findExistingSocialLoginUser(profile);
     } catch (err) {
       if (!(err instanceof userService.SocialEmailConflictError) || !state.linkOnConflict) throw err;
       emailConflict = true;
@@ -1095,7 +1154,7 @@ async function handleSocialAuthCallback(req: Request, res: Response, next: NextF
       providerAvatarUrl: profile.avatarUrl,
       providerEmailVerified: profile.emailVerified,
       returnTo,
-    });
+    }, { allowUnverifiedEmail: Boolean(linkedOidcUser) });
 
     res.redirect(buildSocialAuthCallbackUrl({
       provider: provider.id,
@@ -1171,7 +1230,11 @@ authRouter.post("/:provider/complete", async (req, res, next) => {
         throw new Error("Social auth completion link user mismatch");
       }
       const profile = socialProfileFromCompletion(provider, completion);
-      await userService.linkSocialIdentity(authenticatedLinkUserId, profile);
+      await userService.linkSocialIdentity(authenticatedLinkUserId, profile, {
+        // The signed-in user authorised this link explicitly; the provider's
+        // email claim does not decide it.
+        allowUnverifiedEmail: provider.id === "oidc",
+      });
       const identities = await userService.listUserAuthIdentities(authenticatedLinkUserId);
       res.json({
         provider: completion.provider,

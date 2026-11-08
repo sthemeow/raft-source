@@ -125,3 +125,22 @@ test("browser refresh fails open when attempt id entropy is unavailable", async 
     ls.restore();
   }
 });
+
+test("a refresh completing after sign-out cannot restore tokens", async () => {
+  const ls = stubLocalStorage({ slock_access_token: "at_1", slock_refresh_token: "rt_1" });
+  const originalAdapter = axios.defaults.adapter;
+  try {
+    axios.defaults.adapter = async (config) => {
+      localStorage.setItem("raft.oidc.explicit-signout", "1");
+      localStorage.removeItem("slock_access_token");
+      localStorage.removeItem("slock_refresh_token");
+      return { config, data: { accessToken: "at_2", refreshToken: "rt_2" }, headers: {}, status: 200, statusText: "OK" };
+    };
+    await assert.rejects(refreshTokensWithDedupe());
+    assert.equal(localStorage.getItem("slock_access_token"), null);
+    assert.equal(localStorage.getItem("slock_refresh_token"), null);
+  } finally {
+    axios.defaults.adapter = originalAdapter;
+    ls.restore();
+  }
+});

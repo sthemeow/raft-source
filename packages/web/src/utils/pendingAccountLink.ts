@@ -19,12 +19,12 @@ export function parsePendingAccountLink(value: unknown): PendingAccountLink | nu
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
   if (typeof data.token !== "string" || !/^[A-Za-z0-9_-]{16,512}$/.test(data.token)) return null;
-  if (data.provider !== "google" && data.provider !== "github" && data.provider !== "apple") return null;
+  if (data.provider !== "google" && data.provider !== "github" && data.provider !== "apple" && data.provider !== "oidc") return null;
   if (typeof data.email !== "string" || typeof data.expiresAt !== "string" || !Number.isFinite(Date.parse(data.expiresAt))) return null;
   const methods = data.signInMethods;
   if (!methods || typeof methods !== "object") return null;
   const m = methods as Record<string, unknown>;
-  if (typeof m.password !== "boolean" || !Array.isArray(m.providers) || !m.providers.every((v) => v === "google" || v === "github" || v === "apple")) return null;
+  if (typeof m.password !== "boolean" || !Array.isArray(m.providers) || !m.providers.every((v) => v === "google" || v === "github" || v === "apple" || v === "oidc")) return null;
   return {
     email: data.email, expiresAt: data.expiresAt,
     signInMethods: { password: m.password, providers: m.providers as SocialAuthProviderId[] },

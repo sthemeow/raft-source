@@ -51,6 +51,7 @@ import { useAnnouncementStore } from "./announcementStore";
 import { AVATAR_TOO_LARGE_CODE, isAvatarFileTooLarge } from "../utils/avatarUpload";
 import { detectBrowserTimezone } from "../utils/timeFormatting";
 import { getEmbedMode } from "../embed";
+import { clearOidcSilentAttempt, isOidcSilentSuppressed, suppressOidcSilentAttempt } from "../utils/oidcAutoLogin";
 
 export interface User {
   id: string;
@@ -65,7 +66,7 @@ export interface User {
   signupSurveyCompletedAt?: string | null;
   signupRole?: string | null;
   profileSetupSuggestedHandle?: string | null;
-  profileSetupProvider?: "google" | "github" | "apple" | null;
+  profileSetupProvider?: "google" | "github" | "apple" | "oidc" | null;
   preferredLanguage: string | null;
   /** UI display language (app-chrome i18n). Distinct from preferredLanguage. */
   displayLanguage: string | null;
@@ -354,6 +355,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { data } = await api.post("/auth/login", { email, password, ...(pendingLink ? { pendingLinkToken: pendingLink.token } : {}) });
       if (pendingLink) assertAccountLinkCompleted(data, pendingLink);
+      clearOidcSilentAttempt();
       // Signing in on purpose retires the "I logged out" suppression.
       clearSlockdevManualLogout();
       localStorage.setItem("slock_access_token", data.accessToken);
@@ -379,6 +381,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loading: true });
     try {
       const { data } = await api.post("/auth/register", { email, password, ...legalAcceptance });
+      clearOidcSilentAttempt();
       localStorage.setItem("slock_access_token", data.accessToken);
       localStorage.setItem("slock_refresh_token", data.refreshToken);
       seedMessageBodyFontSizeFromProfile(data.user.preferredMessageBodyFontSize);
@@ -432,6 +435,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: (trigger: LogoutTrigger = "explicit_user_logout") => {
+    if (trigger === "explicit_user_logout") suppressOidcSilentAttempt();
     emitAuthTraceAndFlush("slock.auth.session_cleared", {
       clearSessionCaller: "logout",
       logoutTrigger: trigger,
@@ -586,6 +590,8 @@ setAuthTracePrincipalIdGetter(() => (
 ));
 
 authTokenSync.subscribe((tokens) => {
+  // An explicit sign-out in any tab wins over delayed token broadcasts.
+  if (isOidcSilentSuppressed()) return;
   const current = useAuthStore.getState();
   if (accessTokenSubject(current.accessToken) !== accessTokenSubject(tokens.accessToken)) {
     useAnnouncementStore.getState().reset();

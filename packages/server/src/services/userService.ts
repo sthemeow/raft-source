@@ -806,9 +806,21 @@ async function upsertSocialIdentityTx(
  * The checks and avatar fetch for a social link that must run outside any
  * transaction. Pass the result to linkSocialIdentityTx.
  */
-export async function prepareSocialLink(userId: string, profile: SocialAuthProfile) {
+export async function prepareSocialLink(
+  userId: string,
+  profile: SocialAuthProfile,
+  options: { allowUnverifiedEmail?: boolean } = {},
+) {
   const db = getDb();
-  assertUsableSocialProfile(profile);
+  if (options.allowUnverifiedEmail) {
+    // An explicit link from a signed-in user does not depend on the provider's
+    // email claim; it must still carry the identity fields.
+    if (!profile.email || !profile.providerUserId) {
+      throw new Error(`${getProviderLabel(profile.provider)} profile is missing required identity fields`);
+    }
+  } else {
+    assertUsableSocialProfile(profile);
+  }
   const [currentUser] = await db.select({
     avatarUrl: users.avatarUrl,
   }).from(users).where(eq(users.id, userId));
@@ -863,7 +875,8 @@ export async function linkSocialIdentityTx(
     throw err;
   }
 
-  const shouldVerifyEmail = normalizeEmail(user.email) === normalizedEmail;
+  // Verification comes from the provider's claim, never from the link itself.
+  const shouldVerifyEmail = profile.emailVerified && normalizeEmail(user.email) === normalizedEmail;
   const shouldStartOnboardingJourney = shouldVerifyEmail && !user.emailVerified;
   await transaction.update(users).set({
     avatarUrl: chooseSocialAvatarUrl(user.avatarUrl, prepared.materializedAvatarUrl),
@@ -885,13 +898,41 @@ export async function linkSocialIdentityTx(
   };
 }
 
-export async function linkSocialIdentity(userId: string, profile: SocialAuthProfile) {
-  const prepared = await prepareSocialLink(userId, profile);
+export async function linkSocialIdentity(
+  userId: string,
+  profile: SocialAuthProfile,
+  options: { allowUnverifiedEmail?: boolean } = {},
+) {
+  const prepared = await prepareSocialLink(userId, profile, options);
   const { linkedUser, afterCommit } = await getDb().transaction(
     (transaction) => linkSocialIdentityTx(transaction, userId, profile, prepared),
   );
   await afterCommit();
   return linkedUser;
+}
+
+/**
+ * Looks up a user by the exact (provider, providerUserId) identity only.
+ *
+ * Used where the provider's email claim must not decide whether an existing
+ * account may sign in: once an identity is linked, that link is the credential.
+ * Returns null when nothing is linked; callers must then apply email checks
+ * before creating an account or proposing a link.
+ */
+export async function findLinkedSocialIdentityUser(
+  provider: string,
+  providerUserId: string,
+): Promise<PublicUser | null> {
+  if (!provider || !providerUserId) return null;
+  const db = getDb();
+  const [identity] = await db.select({ userId: userAuthIdentities.userId })
+    .from(userAuthIdentities)
+    .where(and(
+      eq(userAuthIdentities.provider, provider as "google" | "github" | "apple" | "oidc"),
+      eq(userAuthIdentities.providerUserId, providerUserId),
+    ));
+  if (!identity) return null;
+  return getPublicUserByIdTx(db, identity.userId);
 }
 
 export async function findExistingSocialLoginUser(profile: SocialAuthProfile): Promise<PublicUser | null> {

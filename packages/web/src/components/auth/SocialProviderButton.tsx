@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useIntl } from "react-intl";
 import { Button } from "@botiverse/raft-ui";
+import { ShieldCheck } from "lucide-react";
 import type { SocialAuthProviderId } from "../../hooks/useAuthProviders";
 import { AppleLogo, GitHubLogo, GoogleLogo } from "../icons/ProviderLogos";
 
@@ -25,7 +26,9 @@ export default function SocialProviderButton({
     ? <GoogleLogo />
     : providerId === "github"
       ? <GitHubLogo />
-      : <AppleLogo />;
+      : providerId === "apple"
+        ? <AppleLogo />
+        : <ShieldCheck aria-hidden="true" className="size-5" />;
 
   return (
     <Button

@@ -159,7 +159,7 @@ export const userAnalyticsIds = pgTable("user_analytics_ids", {
 export const userAuthIdentities = pgTable("user_auth_identities", {
   id: uuid("id").primaryKey().$defaultFn(() => randomUUID()),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  provider: text("provider", { enum: ["google", "github", "apple"] }).notNull(),
+  provider: text("provider", { enum: ["google", "github", "apple", "oidc"] }).notNull(),
   providerUserId: text("provider_user_id").notNull(),
   providerEmail: text("provider_email"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -235,7 +235,7 @@ export const onboardingEmailJourneys = pgTable("onboarding_email_journeys", {
 export const socialAuthCompletions = pgTable("social_auth_completions", {
   id: uuid("id").primaryKey().$defaultFn(() => randomUUID()),
   codeHash: text("code_hash"),
-  provider: text("provider", { enum: ["google", "github", "apple"] }).notNull(),
+  provider: text("provider", { enum: ["google", "github", "apple", "oidc"] }).notNull(),
   mode: text("mode", { enum: ["login", "link"] }).notNull(),
   intendedAction: text("intended_action", { enum: ["login", "link"] }).notNull(),
   status: text("status", {
@@ -245,6 +245,11 @@ export const socialAuthCompletions = pgTable("social_auth_completions", {
   userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
   providerUserId: text("provider_user_id"),
   providerEmail: text("provider_email"),
+  // The provider's own claim, stored rather than assumed: a link must not mark
+  // a Raft account's email verified on the strength of an unverified claim.
+  // Null means "not recorded yet" (for example a transaction created before the
+  // provider answered); readers must refuse it rather than treat it as false.
+  providerEmailVerified: boolean("provider_email_verified"),
   providerDisplayName: text("provider_display_name"),
   providerAvatarUrl: text("provider_avatar_url"),
   returnTo: text("return_to"),

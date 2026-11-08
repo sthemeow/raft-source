@@ -5,6 +5,7 @@ import { Button, Input, Separator, TextSans } from "@botiverse/raft-ui";
 import { CURRENT_LEGAL_ACCEPTANCE } from "@botiverse/raft-shared";
 import { useAuthStore } from "../../store/authStore";
 import type { AuthProvider, SocialAuthProviderId } from "../../hooks/useAuthProviders";
+import { prepareOidcInteractiveLogin } from "../../utils/oidcAutoLogin";
 import { useAuthProviders } from "../../hooks/useAuthProviders";
 import {
   buildSocialAuthStartUrl,
@@ -41,6 +42,7 @@ export default function RegisterPage({ onSwitchToLogin, previewProviders }: Regi
   const [showOpenInBrowserGuide, setShowOpenInBrowserGuide] = useState(false);
 
   const handleSocialLogin = useCallback((providerId: SocialAuthProviderId) => {
+    if (providerId === "oidc") prepareOidcInteractiveLogin();
     if (previewProviders) return;
     if (isEmbeddedBrowser()) {
       setShowOpenInBrowserGuide(true);

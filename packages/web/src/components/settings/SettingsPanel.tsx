@@ -346,6 +346,13 @@ const PRE_JOIN_AGREEMENT_BODY_MAX_LENGTH_LABEL = "5,000";
 
 
 export function SocialProviderIcon({ providerId }: { providerId: SocialAuthProviderId }) {
+  if (providerId === "oidc") {
+    return (
+      <span className="inline-flex size-[18px] shrink-0 items-center justify-center text-foreground">
+        <Shield aria-hidden="true" className="size-4" />
+      </span>
+    );
+  }
   if (providerId === "google") {
     return (
       <span className="inline-flex size-[18px] shrink-0 items-center justify-center">

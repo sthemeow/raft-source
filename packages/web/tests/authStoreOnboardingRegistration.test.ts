@@ -3,6 +3,7 @@ import "./helpers/domSetup";
 import api from "../src/api/client";
 import { useAuthStore } from "../src/store/authStore";
 import type { User } from "../src/store/authStore";
+import { isOidcSilentSuppressed, suppressOidcSilentAttempt } from "../src/utils/oidcAutoLogin";
 
 const initialAuthState = useAuthStore.getInitialState();
 
@@ -67,6 +68,22 @@ test("register creates the credential account without sending identity fields", 
   assert.equal(localStorage.getItem("slock_access_token"), "access-1");
   assert.equal(localStorage.getItem("slock_refresh_token"), "refresh-1");
   assert.equal(useAuthStore.getState().user?.profileSetupCompletedAt, null);
+});
+
+test.each(["login", "register"] as const)("successful %s clears explicit sign-out suppression", async (method) => {
+  suppressOidcSilentAttempt();
+  vi.spyOn(api, "post").mockResolvedValue({ data: { user: user(), accessToken: "access-1", refreshToken: "refresh-1" } });
+  if (method === "login") await useAuthStore.getState().login("cindy@example.com", "password123");
+  else await useAuthStore.getState().register("cindy@example.com", "password123", legalAcceptance());
+  assert.equal(isOidcSilentSuppressed(), false);
+});
+
+test.each(["login", "register"] as const)("failed %s keeps explicit sign-out suppression", async (method) => {
+  suppressOidcSilentAttempt();
+  vi.spyOn(api, "post").mockRejectedValue(new Error("invalid credentials"));
+  if (method === "login") await assert.rejects(useAuthStore.getState().login("cindy@example.com", "bad"));
+  else await assert.rejects(useAuthStore.getState().register("cindy@example.com", "bad", legalAcceptance()));
+  assert.equal(isOidcSilentSuppressed(), true);
 });
 
 test("completeOnboardingProfile uploads a selected avatar before atomically completing identity", async () => {

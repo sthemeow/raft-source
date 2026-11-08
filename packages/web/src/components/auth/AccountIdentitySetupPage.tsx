@@ -441,6 +441,8 @@ export default function AccountIdentitySetupPage({
       ? "GitHub"
       : provider === "apple"
         ? "Apple"
+        : provider === "oidc"
+          ? "SSO"
         : null;
   // Stryker disable next-line StringLiteral: the label only affects validation copy; pin visibility depends on valid/invalid.
 

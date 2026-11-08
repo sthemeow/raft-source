@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Input, Button, Separator, TextSans } from "@botiverse/raft-ui";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { useIntl } from "react-intl";
@@ -8,6 +8,8 @@ import { useAuthStore } from "../../store/authStore";
 import type { SocialAuthProviderId } from "../../hooks/useAuthProviders";
 import { useAuthProviders } from "../../hooks/useAuthProviders";
 import { buildSocialAuthStartUrl, getCurrentReturnTo, getExternalBrowserLoginUrl, isEmbeddedBrowser } from "../../utils/socialAuth";
+import { claimOidcSilentAttempt, navigateToSilentOidc, prepareOidcInteractiveLogin } from "../../utils/oidcAutoLogin";
+import { hasDesktopBridge } from "../../desktopRuntimeEnvironment";
 import AuthPageFrame, { AuthPageIntro } from "./AuthPageFrame";
 import TextLink from "../ui/TextLink";
 import Banner from "../ui/Banner";
@@ -58,9 +60,16 @@ function LoginPageForm({ onSwitchToRegister, onForgotPassword, accountLink }: Lo
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const [showOpenInBrowserGuide, setShowOpenInBrowserGuide] = useState(false);
 
+  useEffect(() => {
+    const oidc = enabledProviders.find((provider) => provider.id === "oidc" && provider.autoStart === true);
+    if (!oidc || accountLink || isEmbeddedBrowser() || hasDesktopBridge() || !claimOidcSilentAttempt()) return;
+    navigateToSilentOidc(buildSocialAuthStartUrl("oidc", getCurrentReturnTo()));
+  }, [accountLink, enabledProviders]);
+
   const signInProviders = accountLink ? enabledProviders.filter((provider) => accountLink.signInMethods.providers.includes(provider.id)) : enabledProviders;
 
   const handleSocialLogin = useCallback((providerId: SocialAuthProviderId) => {
+    if (providerId === "oidc") prepareOidcInteractiveLogin();
     if (accountLink) {
       accountLink.socialSignIn(providerId);
       return;

@@ -9,6 +9,7 @@ import {
   setAuthRefreshAttemptIdOnError,
 } from "./authErrors";
 import { authTokenSync } from "./authTokenSync";
+import { isOidcSilentSuppressed } from "./oidcAutoLogin";
 import {
   authStatusBucket,
   emitAuthTrace,
@@ -269,6 +270,7 @@ export function createRefreshCoordinator(params: {
           params.onTokensRefreshed?.(tokens);
           return tokens;
         } catch (error: any) {
+          if (error instanceof MissingRefreshTokenError) throw error;
           const status = error?.response?.status as number | undefined;
           if (isAuthErrorStatus(status)) {
             const latestRefreshToken = params.readRefreshToken();
@@ -389,6 +391,8 @@ const browserRefreshCoordinator = createRefreshCoordinator({
   readAccessToken: () => localStorage.getItem("slock_access_token"),
   readRefreshToken: () => localStorage.getItem("slock_refresh_token"),
   writeTokens: (tokens) => {
+    // A refresh that was already in flight must not resurrect a signed-out session.
+    if (isOidcSilentSuppressed()) throw new MissingRefreshTokenError();
     localStorage.setItem("slock_access_token", tokens.accessToken);
     localStorage.setItem("slock_refresh_token", tokens.refreshToken);
   },

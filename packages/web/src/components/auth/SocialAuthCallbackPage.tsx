@@ -11,6 +11,7 @@ import api from "../../api/client";
 import { useAuthStore } from "../../store/authStore";
 import { getExternalBrowserLoginUrl, isEmbeddedUserAgentProviderError, PENDING_INVITE_STORAGE_KEY, sanitizeReturnTo, takePendingInviteRedirectPath } from "../../utils/socialAuth";
 import { completeSocialAuthWithOneLinkRefresh } from "../../utils/socialAuthCompletion";
+import { clearOidcSilentAttempt, hasPendingOidcSilentAttempt, isOidcSilentSuppressed } from "../../utils/oidcAutoLogin";
 import { refreshTokensWithDedupe } from "../../utils/refreshCoordinator";
 import Banner from "../ui/Banner";
 import { Button } from "@botiverse/raft-ui";
@@ -21,7 +22,7 @@ import LegalAcceptanceCheckbox from "./LegalAcceptanceCheckbox";
 import OpenInBrowserSignInGuide from "./OpenInBrowserSignInGuide";
 
 function isSocialAuthProviderId(value: string | null): value is SocialAuthProviderId {
-  return value === "google" || value === "github" || value === "apple";
+  return value === "google" || value === "github" || value === "apple" || value === "oidc";
 }
 
 function navigateHome() {
@@ -39,6 +40,8 @@ function getProviderLabel(
       return "GitHub";
     case "apple":
       return "Apple";
+    case "oidc":
+      return "SSO";
     default:
       return formatMessage({ id: "auth.social.providerFallback" });
   }
@@ -84,13 +87,23 @@ export default function SocialAuthCallbackPage() {
 
   const finishSignIn = useCallback(async (includeLegalAcceptance: boolean) => {
     const epoch = ++completionEpoch.current;
+    const isSilentOidc = callbackParams.provider === "oidc" && callbackParams.mode !== "link" && hasPendingOidcSilentAttempt();
     setFinishing(true);
     setError("");
     try {
+      if (isSilentOidc && isOidcSilentSuppressed()) {
+        setRecovery(true);
+        return;
+      }
       if (callbackParams.error) {
         const pending = callbackParams.mode === "link" ? null : usePendingAccountLink.getState().pending;
         if (pending) {
           failPendingAccountLink(pending.token, { response: { data: { code: callbackParams.error } } });
+          setRecovery(true);
+          return;
+        }
+        if (isSilentOidc
+          && ["login_required", "interaction_required", "consent_required", "account_selection_required"].includes(callbackParams.error)) {
           setRecovery(true);
           return;
         }
@@ -150,6 +163,12 @@ export default function SocialAuthCallbackPage() {
           assertAccountLinkCompleted(data, pendingLink);
           clearPendingAccountLink(pendingLink.token);
         }
+        if (isSilentOidc && isOidcSilentSuppressed()) {
+          void api.post("/auth/logout", { refreshToken: data.refreshToken }).catch(() => {});
+          setRecovery(true);
+          return;
+        }
+        if (!isSilentOidc) clearOidcSilentAttempt();
         setTokens(data.accessToken, data.refreshToken);
 
         const pendingInviteRedirect = takePendingInviteRedirectPath();

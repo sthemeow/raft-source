@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import "./helpers/domSetup";
 import { useAuthStore } from "../src/store/authStore";
 import { useServerStore } from "../src/store/serverStore";
+import { claimOidcSilentAttempt, clearOidcSilentAttempt } from "../src/utils/oidcAutoLogin";
+import { authTokenSync } from "../src/utils/authTokenSync";
 
 /**
  * `authStore.logout()` may fire `session:logout` on the host bridge only when the
@@ -57,12 +59,14 @@ function seedLoggedIn(): void {
 let cap: Capture;
 
 beforeEach(() => {
+  clearOidcSilentAttempt();
   cap = { calls: [] };
   installHost(cap);
   seedLoggedIn();
 });
 
 afterEach(() => {
+  clearOidcSilentAttempt();
   delete (window as unknown as { RaftHost?: unknown }).RaftHost;
 });
 
@@ -80,11 +84,15 @@ test("explicit_user_logout: emits `session:logout` exactly once, AFTER local sta
 test("default trigger (no arg) is explicit_user_logout — emits once", () => {
   useAuthStore.getState().logout();
   assert.equal(cap.calls.length, 1);
+  assert.equal(claimOidcSilentAttempt(), false, "explicit logout must not immediately sign back in");
+  authTokenSync.publish({ accessToken: "late-access", refreshToken: "late-refresh" });
+  assert.equal(useAuthStore.getState().accessToken, null, "late token broadcasts must not undo logout");
 });
 
 test("terminal_verdict: zero `session:logout` — recoverable state, host bootstraps its own auth", () => {
   useAuthStore.getState().logout("terminal_verdict");
   assert.equal(cap.calls.length, 0);
+  assert.equal(claimOidcSilentAttempt(), true, "recoverable session loss may attempt silent sign-in");
 });
 
 test("restore_timeout: zero `session:logout` — the host must not be told to destroy the session", () => {

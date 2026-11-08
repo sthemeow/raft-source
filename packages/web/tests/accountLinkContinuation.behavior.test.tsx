@@ -5,6 +5,7 @@ import { TestIntlProvider } from "./helpers/intl";
 import SocialAuthCallbackPage from "../src/components/auth/SocialAuthCallbackPage";
 import LoginPage from "../src/components/auth/LoginPage";
 import { clearPendingAccountLink, parsePendingAccountLink, setPendingAccountLink, usePendingAccountLink } from "../src/utils/pendingAccountLink";
+import { claimOidcSilentAttempt, clearOidcSilentAttempt, isOidcSilentSuppressed, suppressOidcSilentAttempt } from "../src/utils/oidcAutoLogin";
 
 const fixture = vi.hoisted(() => ({ post: vi.fn(), login: vi.fn(), setTokens: vi.fn(), loadUser: vi.fn() }));
 vi.mock("../src/api/client", () => ({ default: { post: fixture.post } }));
@@ -26,8 +27,8 @@ function seed() {
   setPendingAccountLink(pending);
   return pending;
 }
-beforeEach(() => { vi.clearAllMocks(); setPendingAccountLink(null); window.history.replaceState({}, "", "/"); });
-afterEach(() => { cleanup(); setPendingAccountLink(null); });
+beforeEach(() => { vi.clearAllMocks(); setPendingAccountLink(null); clearOidcSilentAttempt(); window.history.replaceState({}, "", "/"); });
+afterEach(() => { cleanup(); setPendingAccountLink(null); clearOidcSilentAttempt(); });
 
 // Exercises the actual callback -> continuation -> shared form, not just its copy.
 test("code conflict resumes the same account connection without issuing a session", async () => {
@@ -41,6 +42,53 @@ test("code conflict resumes the same account connection without issuing a sessio
   expect(fixture.setTokens).not.toHaveBeenCalled();
   expect(window.location.search).toBe("");
   expect(usePendingAccountLink.getState().pending?.token).toBe(conflict.pendingLinkToken);
+});
+
+test("OIDC callback sends the completion to the matching provider and does not auto-link an existing account", async () => {
+  const oidcConflict = { ...conflict, provider: "oidc" };
+  window.history.replaceState({}, "", "/?auth_callback=social&provider=oidc&code=one-time-code");
+  fixture.post.mockRejectedValue({ response: { status: 409, data: oidcConflict } });
+  render(<TestIntlProvider><SocialAuthCallbackPage /></TestIntlProvider>);
+  await screen.findByRole("button", { name: "Sign in and connect SSO" });
+  expect(fixture.post).toHaveBeenCalledWith("/auth/oidc/complete", { code: "one-time-code" });
+  expect(fixture.setTokens).not.toHaveBeenCalled();
+  expect(usePendingAccountLink.getState().pending?.provider).toBe("oidc");
+});
+
+test("silent OIDC login_required falls back to normal login without retrying", async () => {
+  expect(claimOidcSilentAttempt()).toBe(true);
+  window.history.replaceState({}, "", "/?auth_callback=social&provider=oidc&error=login_required");
+  render(<TestIntlProvider><SocialAuthCallbackPage /></TestIntlProvider>);
+  await screen.findByRole("heading", { name: "Sign In" });
+  expect(fixture.post).not.toHaveBeenCalled();
+  expect(fixture.setTokens).not.toHaveBeenCalled();
+  expect(claimOidcSilentAttempt()).toBe(false);
+});
+
+test("a sign-out in another tab cannot be undone by an in-flight silent callback", async () => {
+  expect(claimOidcSilentAttempt()).toBe(true);
+  let resolveCompletion!: (value: unknown) => void;
+  fixture.post.mockImplementation((path: string) => path === "/auth/oidc/complete"
+    ? new Promise((resolve) => { resolveCompletion = resolve; })
+    : Promise.resolve({ status: 204 }));
+  window.history.replaceState({}, "", "/?auth_callback=social&provider=oidc&code=one-time-code");
+  render(<TestIntlProvider><SocialAuthCallbackPage /></TestIntlProvider>);
+  await waitFor(() => expect(fixture.post).toHaveBeenCalledWith("/auth/oidc/complete", { code: "one-time-code" }));
+  suppressOidcSilentAttempt();
+  await act(async () => resolveCompletion({ data: { mode: "login", accessToken: "late-access", refreshToken: "late-refresh" } }));
+  await screen.findByRole("heading", { name: "Sign In" });
+  expect(fixture.setTokens).not.toHaveBeenCalled();
+  expect(fixture.post).toHaveBeenCalledWith("/auth/logout", { refreshToken: "late-refresh" });
+});
+
+test.each(["oidc", "google", "github", "apple"])("successful interactive %s clears explicit sign-out suppression", async (provider) => {
+  suppressOidcSilentAttempt();
+  window.history.replaceState({}, "", `/?auth_callback=social&provider=${provider}&code=one-time-code`);
+  fixture.post.mockResolvedValue({ data: { mode: "login", accessToken: "access", refreshToken: "refresh" } });
+  fixture.loadUser.mockResolvedValue(undefined);
+  render(<TestIntlProvider><SocialAuthCallbackPage /></TestIntlProvider>);
+  await waitFor(() => expect(fixture.setTokens).toHaveBeenCalledWith("access", "refresh"));
+  expect(isOidcSilentSuppressed()).toBe(false);
 });
 
 test("passwordless account offers only its real original provider", () => {

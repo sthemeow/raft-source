@@ -12,6 +12,12 @@ test("network boundary accepts only typed continuation handles and sign-in metho
   expect(parsePendingAccountLink({ ...payload, expiresAt: "invalid" })).toBeNull();
   expect(parsePendingAccountLink({ ...payload, signInMethods: { password: false, providers: ["unknown"] } })).toBeNull();
 });
+test("OIDC account conflicts can require explicit account linking", () => {
+  const pending = parsePendingAccountLink({ ...payload, provider: "oidc", signInMethods: { password: false, providers: ["oidc"] } });
+  expect(pending?.provider).toBe("oidc");
+  expect(pending?.signInMethods.providers).toEqual(["oidc"]);
+  expect(parsePendingAccountLink({ ...payload, provider: "oidc", signInMethods: { password: false, providers: ["untrusted-provider"] } })).toBeNull();
+});
 test("legacy conflicts and ordinary failures cannot become a link continuation", () => {
   expect(pendingAccountLinkFromError({ response: { data: { code: "account_conflict", ...payload } } })).toBeNull();
   expect(pendingAccountLinkFromError(new Error("account_link_required"))).toBeNull();

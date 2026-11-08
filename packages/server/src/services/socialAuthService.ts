@@ -1,5 +1,13 @@
 import { createHash, createPublicKey, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
+import {
+  buildOidcAuthorizationUrl,
+  exchangeOidcCode,
+  getOidcConfig,
+  isOidcConfigured,
+  oidcProviderUserId,
+  verifyOidcIdToken,
+} from "./oidcProvider";
 import { and, eq, gt, isNotNull, isNull, lt, type SQL } from "drizzle-orm";
 import { currentTimeMs, sanitizeAppLocalReturnPath } from "@botiverse/raft-shared";
 import { getDb, type DatabaseExecutor } from "../db/index";
@@ -7,7 +15,7 @@ import { oauthTransactions, socialAuthCompletions, userAuthIdentities } from "..
 import { getAppUrl as getConfiguredOrDefaultAppUrl } from "../config/appUrl";
 import { findExistingSocialLoginUser, getUserByEmail, SocialEmailConflictError } from "./userService";
 
-export type SocialAuthProvider = "google" | "github" | "apple";
+export type SocialAuthProvider = "google" | "github" | "apple" | "oidc";
 export type SocialAuthMode = "login" | "link";
 export type SocialAuthStateKind = "web" | "mobile";
 export type MobileOAuthRequestStatus =
@@ -68,6 +76,7 @@ export interface SocialAuthCompletionResult {
   providerEmail?: string;
   providerDisplayName?: string;
   providerAvatarUrl?: string;
+  providerEmailVerified: boolean;
   userId?: string;
 }
 
@@ -108,6 +117,7 @@ export interface MobileOAuthCompletionResult {
   userId?: string;
   providerUserId?: string;
   providerEmail?: string;
+  providerEmailVerified: boolean;
   providerDisplayName?: string;
   providerAvatarUrl?: string;
 }
@@ -116,6 +126,8 @@ export const SOCIAL_AUTH_PROVIDERS: SocialAuthProviderConfig[] = [
   { id: "google", label: "Google" },
   { id: "github", label: "GitHub" },
   { id: "apple", label: "Apple" },
+  // Only surfaced when the deployment provides a complete OIDC configuration.
+  { id: "oidc", label: "SSO" },
 ];
 
 const DEFAULT_MOBILE_OAUTH_RETURN_URIS = [
@@ -357,7 +369,10 @@ export function isNativeAppleSignInConfigured(): boolean {
   );
 }
 
-function getStateCookieName(provider: SocialAuthProvider): string {
+function getStateCookieName(provider: SocialAuthProvider, nonce?: string): string {
+  // OIDC scopes the cookie to the nonce so concurrent starts (for example a
+  // browser restoring several tabs at once) cannot overwrite each other.
+  if (provider === "oidc" && nonce) return `slock_oidc_oauth_nonce_${nonce}`;
   return `slock_${provider}_oauth_nonce`;
 }
 
@@ -399,7 +414,7 @@ export function buildStateCookie(provider: SocialAuthProvider, nonce: string): s
   // be withheld and every web login would fail the browser-bound nonce check.
   // Apple web return URLs must be HTTPS, which also lets us require Secure.
   const usesCrossSiteFormPost = provider === "apple";
-  return serializeCookie(getStateCookieName(provider), nonce, {
+  return serializeCookie(getStateCookieName(provider, nonce), nonce, {
     httpOnly: true,
     sameSite: usesCrossSiteFormPost ? "None" : "Lax",
     secure: usesCrossSiteFormPost || shouldUseSecureCookie(),
@@ -408,9 +423,35 @@ export function buildStateCookie(provider: SocialAuthProvider, nonce: string): s
   });
 }
 
-export function clearStateCookie(provider: SocialAuthProvider): string {
+/** PKCE verifier for the OIDC flow; kept out of the URL and out of the state. */
+export function buildOidcVerifierCookie(nonce: string, verifier: string): string {
+  return serializeCookie(`raft_oidc_code_verifier_${nonce}`, verifier, {
+    httpOnly: true,
+    sameSite: "Lax",
+    secure: shouldUseSecureCookie(),
+    path: "/api/auth/oidc/callback",
+    maxAge: 10 * 60,
+  });
+}
+
+export function clearOidcVerifierCookie(nonce?: string): string {
+  return serializeCookie(nonce ? `raft_oidc_code_verifier_${nonce}` : "raft_oidc_code_verifier", "", {
+    httpOnly: true,
+    sameSite: "Lax",
+    secure: shouldUseSecureCookie(),
+    path: "/api/auth/oidc/callback",
+    expires: new Date(0),
+  });
+}
+
+export function readOidcVerifierCookie(cookieHeader: string | undefined, nonce: string): string | null {
+  const value = parseCookieHeader(cookieHeader)[`raft_oidc_code_verifier_${nonce}`];
+  return typeof value === "string" && value ? value : null;
+}
+
+export function clearStateCookie(provider: SocialAuthProvider, nonce?: string): string {
   const usesCrossSiteFormPost = provider === "apple";
-  return serializeCookie(getStateCookieName(provider), "", {
+  return serializeCookie(getStateCookieName(provider, nonce), "", {
     httpOnly: true,
     sameSite: usesCrossSiteFormPost ? "None" : "Lax",
     secure: usesCrossSiteFormPost || shouldUseSecureCookie(),
@@ -419,8 +460,12 @@ export function clearStateCookie(provider: SocialAuthProvider): string {
   });
 }
 
-export function readStateCookie(provider: SocialAuthProvider, cookieHeader: string | undefined): string | null {
-  return parseCookieHeader(cookieHeader)[getStateCookieName(provider)] || null;
+export function readStateCookie(
+  provider: SocialAuthProvider,
+  cookieHeader: string | undefined,
+  nonce?: string,
+): string | null {
+  return parseCookieHeader(cookieHeader)[getStateCookieName(provider, nonce)] || null;
 }
 
 export function getServerUrl(): string {
@@ -484,7 +529,7 @@ export function validateSocialAuthCallbackState(
   // cross-origin XHR in Settings, where modern browsers may not persist that
   // cookie consistently; the signed state token remains the source of truth.
   if (state.mode === "login") {
-    const stateCookie = readStateCookie(provider, cookieHeader);
+    const stateCookie = readStateCookie(provider, cookieHeader, state.nonce);
     if (!stateCookie || stateCookie !== state.nonce) {
       throw new Error("Social sign-in browser state mismatch");
     }
@@ -538,7 +583,7 @@ export async function createMobileOAuthStart(params: {
 
   return {
     requestId: request.id,
-    authorizationUrl: buildAuthorizationUrl(params.provider, state, mode, nonce),
+    authorizationUrl: await buildAuthorizationUrl(params.provider, state, mode, nonce),
     returnUri,
     expiresAt,
   };
@@ -742,6 +787,7 @@ export async function completeMobileOAuthProviderCallback(params: {
     userId: request.mode === "link" ? request.userId : intendedAction === "link" ? null : existingUserId,
     providerUserId: profile.providerUserId,
     providerEmail: profile.email,
+    providerEmailVerified: profile.emailVerified,
     providerDisplayName: profile.displayName ?? null,
     providerAvatarUrl: profile.avatarUrl ?? null,
   }).where(and(
@@ -866,6 +912,7 @@ export async function completeNativeAppleMobileOAuthAuthorization(params: {
       userId: request.mode === "link" ? request.userId : existingUser?.id ?? null,
       providerUserId: profile.providerUserId,
       providerEmail: profile.email,
+      providerEmailVerified: profile.emailVerified,
       providerDisplayName: null,
       providerAvatarUrl: null,
     }).where(and(
@@ -897,6 +944,11 @@ function toMobileOAuthCompletionResult(request: typeof oauthTransactions.$inferS
   if (request.mode !== "login" && request.mode !== "link") {
     throw new Error("handoff_code_invalid");
   }
+  if (request.providerEmailVerified === null) {
+    // Never infer "unverified" from a missing write; a completed handoff must
+    // carry the provider's claim.
+    throw new Error("handoff_code_invalid");
+  }
   if (!request.codeChallenge) {
     throw new Error("handoff_code_invalid");
   }
@@ -910,6 +962,7 @@ function toMobileOAuthCompletionResult(request: typeof oauthTransactions.$inferS
     userId: request.userId ?? undefined,
     providerUserId: request.providerUserId ?? undefined,
     providerEmail: request.providerEmail ?? undefined,
+    providerEmailVerified: request.providerEmailVerified,
     providerDisplayName: request.providerDisplayName ?? undefined,
     providerAvatarUrl: request.providerAvatarUrl ?? undefined,
   };
@@ -980,6 +1033,8 @@ export function isSocialAuthProviderConfigured(provider: SocialAuthProvider): bo
         !!process.env.APPLE_CLIENT_SECRET ||
         (!!process.env.APPLE_TEAM_ID && !!process.env.APPLE_KEY_ID && !!process.env.APPLE_PRIVATE_KEY)
       );
+    case "oidc":
+      return isOidcConfigured();
     default:
       return false;
   }
@@ -996,18 +1051,42 @@ export function getSocialAuthRedirectUri(provider: SocialAuthProvider): string {
     case "apple":
       if (process.env.APPLE_REDIRECT_URI) return process.env.APPLE_REDIRECT_URI;
       return `${getServerUrl()}/api/auth/apple/callback`;
+    case "oidc": {
+      const config = getOidcConfig();
+      if (!config) throw new Error("OIDC is not configured");
+      return config.redirectUri;
+    }
     default:
       throw new Error(`Unsupported social auth provider: ${provider satisfies never}`);
   }
 }
 
-export function buildAuthorizationUrl(
+export async function buildAuthorizationUrl(
   provider: SocialAuthProvider,
   state: string,
   mode: SocialAuthMode,
   nonce: string,
-): string {
+  options: { codeChallenge?: string; silent?: boolean } = {},
+): Promise<string> {
   switch (provider) {
+    case "oidc": {
+      const config = getOidcConfig();
+      if (!config) throw new Error("OIDC is not configured");
+      if (!options.codeChallenge) {
+        // PKCE is mandatory for this provider; refusing is safer than sending
+        // a request we cannot complete safely.
+        throw new Error("oidc_code_challenge_required");
+      }
+      return buildOidcAuthorizationUrl(config, {
+        state,
+        nonce,
+        codeChallenge: options.codeChallenge,
+        // Silent start is only allowed when the deployment opted in, and only
+        // for a normal login (never for an explicit account link).
+        silent: Boolean(options.silent) && config.autoStart && mode === "login",
+        selectAccount: mode === "link",
+      });
+    }
     case "google": {
       const params = new URLSearchParams({
         client_id: process.env.GOOGLE_CLIENT_ID!,
@@ -1051,8 +1130,19 @@ export function buildAuthorizationUrl(
   }
 }
 
-export async function exchangeProviderCode(provider: SocialAuthProvider, code: string): Promise<{ accessToken: string }> {
+export async function exchangeProviderCode(
+  provider: SocialAuthProvider,
+  code: string,
+  options: { codeVerifier?: string } = {},
+): Promise<{ accessToken: string; idToken?: string }> {
   switch (provider) {
+    case "oidc": {
+      const config = getOidcConfig();
+      if (!config) throw new Error("OIDC is not configured");
+      if (!options.codeVerifier) throw new Error("oidc_code_verifier_missing");
+      const tokens = await exchangeOidcCode(config, { code, codeVerifier: options.codeVerifier });
+      return { accessToken: tokens.accessToken ?? "", idToken: tokens.idToken };
+    }
     case "google": {
       const response = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
@@ -1274,8 +1364,25 @@ export async function fetchSocialAuthProfile(
   provider: SocialAuthProvider,
   accessToken: string,
   expectedNonce?: string,
+  options: { idToken?: string } = {},
 ): Promise<SocialAuthProfile> {
   switch (provider) {
+    case "oidc": {
+      const config = getOidcConfig();
+      if (!config) throw new Error("OIDC is not configured");
+      if (!options.idToken) throw new Error("oidc_id_token_missing");
+      if (!expectedNonce) throw new Error("oidc_nonce_missing");
+      const identity = await verifyOidcIdToken(config, options.idToken, { nonce: expectedNonce });
+      return {
+        provider: "oidc",
+        // The identity key is the (issuer, subject) pair, not the subject alone.
+        providerUserId: oidcProviderUserId(identity),
+        email: identity.email ?? "",
+        emailVerified: identity.emailVerified,
+        displayName: identity.displayName,
+        avatarUrl: identity.avatarUrl,
+      };
+    }
     case "google": {
       const response = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -1353,15 +1460,23 @@ export async function createSocialAuthCompletion(params: {
   providerAvatarUrl?: string | null;
   providerEmailVerified: boolean;
   returnTo?: string;
-}): Promise<string> {
-  assertVerifiedSocialAuthProfile({
-    provider: params.provider,
-    providerUserId: params.providerUserId ?? "",
-    email: params.providerEmail ?? "",
-    emailVerified: params.providerEmailVerified,
-    displayName: params.providerDisplayName,
-    avatarUrl: params.providerAvatarUrl,
-  });
+}, options: { allowUnverifiedEmail?: boolean } = {}): Promise<string> {
+  if (options.allowUnverifiedEmail) {
+    // Only for an identity that is already linked: (provider, providerUserId)
+    // is the credential, and the email claim is not used to decide access.
+    if (!params.providerUserId || !params.providerEmail) {
+      throw new Error(`${params.provider} profile is missing required identity fields`);
+    }
+  } else {
+    assertVerifiedSocialAuthProfile({
+      provider: params.provider,
+      providerUserId: params.providerUserId ?? "",
+      email: params.providerEmail ?? "",
+      emailVerified: params.providerEmailVerified,
+      displayName: params.providerDisplayName,
+      avatarUrl: params.providerAvatarUrl,
+    });
+  }
 
   const database = getDb();
   const code = randomBytes(32).toString("hex");
@@ -1378,6 +1493,7 @@ export async function createSocialAuthCompletion(params: {
     userId: params.userId ?? null,
     providerUserId: params.providerUserId ?? null,
     providerEmail: params.providerEmail ?? null,
+    providerEmailVerified: params.providerEmailVerified,
     providerDisplayName: params.providerDisplayName ?? null,
     providerAvatarUrl: params.providerAvatarUrl ?? null,
     returnTo: sanitizeReturnTo(params.returnTo),
@@ -1391,6 +1507,9 @@ function toSocialAuthCompletionResult(completion: typeof socialAuthCompletions.$
   if (completion.mode !== "login" && completion.mode !== "link") {
     throw new Error("Social auth completion mode mismatch");
   }
+  if (completion.providerEmailVerified === null) {
+    throw new Error("Social auth completion is missing the provider email claim");
+  }
   return {
     provider: completion.provider,
     mode: completion.mode,
@@ -1401,6 +1520,7 @@ function toSocialAuthCompletionResult(completion: typeof socialAuthCompletions.$
     providerEmail: completion.providerEmail ?? undefined,
     providerDisplayName: completion.providerDisplayName ?? undefined,
     providerAvatarUrl: completion.providerAvatarUrl ?? undefined,
+    providerEmailVerified: completion.providerEmailVerified,
   };
 }
 
@@ -1554,12 +1674,18 @@ export async function assertPendingSocialLinkFor(token: string, userId: string |
 
 function pendingLinkProfile(row: typeof socialAuthCompletions.$inferSelect): SocialAuthProfile {
   if (!row.providerUserId || !row.providerEmail) throw new PendingSocialLinkError("pending_link_expired");
+  if (row.providerEmailVerified === null) {
+    // A completed provider response always records the claim; refuse rather
+    // than silently treating an unwritten value as unverified.
+    throw new PendingSocialLinkError("pending_link_expired");
+  }
   return {
     provider: row.provider,
     providerUserId: row.providerUserId,
     email: row.providerEmail,
-    // Only verified provider profiles are written (assertVerifiedSocialAuthProfile).
-    emailVerified: true,
+    // Carry the provider's real claim. Linking must not mark the Raft
+    // account's email verified on the strength of an unverified one.
+    emailVerified: row.providerEmailVerified,
     displayName: row.providerDisplayName,
     avatarUrl: row.providerAvatarUrl,
   };

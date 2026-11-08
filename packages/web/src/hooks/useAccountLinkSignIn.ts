@@ -5,6 +5,7 @@ import { useIntl } from "react-intl";
 import { useAuthStore } from "../store/authStore";
 import { accountLinkErrorCode, accountLinkHttpStatus, clearPendingAccountLink, failPendingAccountLink, usePendingAccountLink } from "../utils/pendingAccountLink";
 import { buildSocialAuthStartUrl, takePendingInviteRedirectPath } from "../utils/socialAuth";
+import { prepareOidcInteractiveLogin } from "../utils/oidcAutoLogin";
 import type { AccountLinkSignIn } from "../components/auth/LoginPage";
 
 export function useAccountLinkSignIn(): AccountLinkSignIn | undefined {
@@ -14,7 +15,7 @@ export function useAccountLinkSignIn(): AccountLinkSignIn | undefined {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (!pending) return undefined;
-  const providerLabel = { google: "Google", github: "GitHub", apple: "Apple" }[pending.provider];
+  const providerLabel = { google: "Google", github: "GitHub", apple: "Apple", oidc: "SSO" }[pending.provider];
   const failureId = failure === "pending_link_expired" ? "auth.accountLink.expired"
     : failure === "pending_link_account_mismatch" ? "auth.accountLink.mismatch"
     : failure === "provider_conflict" ? "auth.accountLink.providerConflict"
@@ -24,6 +25,7 @@ export function useAccountLinkSignIn(): AccountLinkSignIn | undefined {
     terminal,
     restart() {
       clearPendingAccountLink(pending.token);
+      if (pending.provider === "oidc") prepareOidcInteractiveLogin();
       window.location.href = buildSocialAuthStartUrl(pending.provider, pending.returnTo);
     },
     attemptId: pending.token, provider: pending.provider, providerLabel, email: pending.email, signInMethods: pending.signInMethods, busy, error: failure ? formatMessage({ id: failureId }, { provider: providerLabel, email: pending.email }) : error,
@@ -49,6 +51,7 @@ export function useAccountLinkSignIn(): AccountLinkSignIn | undefined {
     },
     socialSignIn(provider) {
       if (busy) return;
+      if (provider === "oidc") prepareOidcInteractiveLogin();
       window.location.href = buildSocialAuthStartUrl(provider, pending.returnTo);
     },
     cancel() {

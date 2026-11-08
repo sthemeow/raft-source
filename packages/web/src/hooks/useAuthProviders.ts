@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../api/client";
 
-export type SocialAuthProviderId = "google" | "github" | "apple";
+export type SocialAuthProviderId = "google" | "github" | "apple" | "oidc";
 
 export interface AuthProvider {
   id: SocialAuthProviderId;
   label: string;
   enabled: boolean;
+  autoStart?: boolean;
 }
 
 const DEFAULT_PROVIDERS: AuthProvider[] = [];
@@ -20,7 +21,7 @@ export function __resetAuthProvidersForTest(): void {
 }
 
 function isSocialAuthProviderId(value: unknown): value is SocialAuthProviderId {
-  return value === "google" || value === "github" || value === "apple";
+  return value === "google" || value === "github" || value === "apple" || value === "oidc";
 }
 
 function normalizeProviders(data: unknown): AuthProvider[] {
@@ -29,13 +30,14 @@ function normalizeProviders(data: unknown): AuthProvider[] {
   }
 
   return data.providers
-    .filter((provider): provider is { id: SocialAuthProviderId; label?: unknown; enabled?: unknown } =>
+    .filter((provider): provider is { id: SocialAuthProviderId; label?: unknown; enabled?: unknown; autoStart?: unknown } =>
       !!provider && typeof provider === "object" && isSocialAuthProviderId((provider as { id?: unknown }).id)
     )
     .map((provider) => ({
       id: provider.id,
       label: typeof provider.label === "string" ? provider.label : provider.id,
       enabled: !!provider.enabled,
+      ...(provider.id === "oidc" && provider.autoStart === true ? { autoStart: true } : {}),
     }));
 }
 

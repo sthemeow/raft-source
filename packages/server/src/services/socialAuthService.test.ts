@@ -334,7 +334,7 @@ test("durable web completion rejects an unverified provider email before persist
   );
 });
 
-test("GitHub authorization URL includes redirect URI and required scopes", () => {
+test("GitHub authorization URL includes redirect URI and required scopes", async () => {
   const previousServerUrl = process.env.SERVER_URL;
   const previousGithubClientId = process.env.GITHUB_CLIENT_ID;
   const previousGithubClientSecret = process.env.GITHUB_CLIENT_SECRET;
@@ -343,7 +343,7 @@ test("GitHub authorization URL includes redirect URI and required scopes", () =>
   process.env.GITHUB_CLIENT_ID = "github-client-id";
   process.env.GITHUB_CLIENT_SECRET = "github-client-secret";
 
-  const authorizationUrl = new URL(buildAuthorizationUrl("github", "state-123", "login", "nonce-123"));
+  const authorizationUrl = new URL(await buildAuthorizationUrl("github", "state-123", "login", "nonce-123"));
 
   assert.equal(authorizationUrl.origin, "https://github.com");
   assert.equal(authorizationUrl.pathname, "/login/oauth/authorize");
@@ -360,7 +360,7 @@ test("GitHub authorization URL includes redirect URI and required scopes", () =>
   else process.env.GITHUB_CLIENT_SECRET = previousGithubClientSecret;
 });
 
-test("Apple authorization URL includes redirect URI and OpenID response settings", () => {
+test("Apple authorization URL includes redirect URI and OpenID response settings", async () => {
   const previousServerUrl = process.env.SERVER_URL;
   const previousAppleClientId = process.env.APPLE_CLIENT_ID;
   const previousAppleClientSecret = process.env.APPLE_CLIENT_SECRET;
@@ -369,7 +369,7 @@ test("Apple authorization URL includes redirect URI and OpenID response settings
   process.env.APPLE_CLIENT_ID = "apple-client-id";
   process.env.APPLE_CLIENT_SECRET = "apple-client-secret";
 
-  const authorizationUrl = new URL(buildAuthorizationUrl("apple", "state-apple", "login", "nonce-apple"));
+  const authorizationUrl = new URL(await buildAuthorizationUrl("apple", "state-apple", "login", "nonce-apple"));
 
   assert.equal(authorizationUrl.origin, "https://appleid.apple.com");
   assert.equal(authorizationUrl.pathname, "/auth/authorize");
