@@ -115,7 +115,8 @@
     "test:migration-0411-locks": "MIGRATION_0411_LOCKS_REAL_PG_REQUIRED=1 vitest run src/db/migration0411LockWindow.realPg.test.ts",
     "test:artifact-publish-real-pg": "ARTIFACT_PUBLISH_REAL_PG_REQUIRED=1 vitest run src/apps/artifacts/publish.realPg.test.ts",
     "test:notification-outbox-fk-indexes-real-pg": "NOTIFICATION_OUTBOX_FK_INDEXES_REAL_PG_REQUIRED=1 vitest run src/db/notificationOutboxFkIndexes.realPg.test.ts",
-    "test:mcp-default-mirror": "MCP_DEFAULT_MIRROR_REAL_PG_REQUIRED=1 vitest run src/db/managedMcpDefaultMirror.realPg.test.ts"
+    "test:mcp-default-mirror": "MCP_DEFAULT_MIRROR_REAL_PG_REQUIRED=1 vitest run src/db/managedMcpDefaultMirror.realPg.test.ts",
+    "ops:bootstrap-admin": "node --import @oxc-node/core/register scripts/bootstrap-admin.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.129.0",
