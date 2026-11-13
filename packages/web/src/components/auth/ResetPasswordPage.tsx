@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
+import { CURRENT_LEGAL_ACCEPTANCE } from "@botiverse/raft-shared";
 import { Input, Button, TextSans, TextLink } from "@botiverse/raft-ui";
 import type { ChangeEvent, FormEvent } from "react";
-import { useIntl } from "react-intl";
+import { FormattedMessage, useIntl } from "react-intl";
 import { useAuthStore } from "../../store/authStore";
 import { ArrowLeft } from "lucide-react";
 import AuthPageFrame, { AuthPageIntro } from "./AuthPageFrame";
@@ -23,6 +24,12 @@ export default function ResetPasswordPage({ token, onBack }: ResetPasswordPagePr
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ password?: string; confirmPassword?: string }>({});
+  // The account-setup link an administrator's "create account" email sends
+  // carries `setup=1`: this person has not accepted the terms yet, and is the
+  // one who must accept them (#Raft-Dev:a5519ad5).
+  const [isSetup] = useState(() => new URLSearchParams(window.location.search).get("setup") === "1");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [termsError, setTermsError] = useState("");
 
   const handlePasswordChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     setPassword(e.target.value);
@@ -47,15 +54,31 @@ export default function ResetPasswordPage({ token, onBack }: ResetPasswordPagePr
       setFieldErrors({ confirmPassword: formatMessage({ id: AUTH_MESSAGE_IDS.passwordsDoNotMatch }) });
       return;
     }
+    setTermsError("");
+    if (isSetup && !acceptedTerms) {
+      setTermsError(formatMessage({ id: "pages.resetPassword.termsRequired" }));
+      return;
+    }
 
     setLoading(true);
     try {
-      await resetPassword(token, password);
+      await resetPassword(
+        token,
+        password,
+        isSetup
+          ? {
+            acceptTerms: true,
+            termsVersion: CURRENT_LEGAL_ACCEPTANCE.termsVersion,
+            privacyVersion: CURRENT_LEGAL_ACCEPTANCE.privacyVersion,
+          }
+          : undefined,
+      );
       setSuccess(true);
       // Clean up URL — drop ONLY the reset token; preserve any other query params
       // (invite/verify/etc.) so a following flow isn't silently lost.
       const url = new URL(window.location.href);
       url.searchParams.delete("reset");
+      url.searchParams.delete("setup");
       window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     } catch (err: any) {
       setError(authServerErrorMessage(err, formatMessage({ id: "pages.resetPassword.failed" }), formatMessage));
@@ -89,7 +112,10 @@ export default function ResetPasswordPage({ token, onBack }: ResetPasswordPagePr
   return (
     <AuthPageFrame>
       <div className="w-full">
-        <AuthPageIntro title={formatMessage({ id: "pages.resetPassword.title" })} />
+        <AuthPageIntro
+          title={formatMessage({ id: isSetup ? "pages.resetPassword.setupTitle" : "pages.resetPassword.title" })}
+          {...(isSetup ? { description: formatMessage({ id: "pages.resetPassword.setupDescription" }) } : {})}
+        />
 
         {error && (
           <Banner intent="warning" className="mb-4">{error}</Banner>
@@ -117,6 +143,28 @@ export default function ResetPasswordPage({ token, onBack }: ResetPasswordPagePr
               required
             />
           </FormField>
+          {isSetup ? (
+            <div>
+              <label className="flex items-start gap-2 text-sans-small text-foreground-muted" data-testid="reset-terms">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => { setAcceptedTerms(e.target.checked); if (e.target.checked) setTermsError(""); }}
+                  className="mt-0.5"
+                />
+                <span>
+                  <FormattedMessage
+                    id="pages.resetPassword.terms"
+                    values={{
+                      terms: <a href={CURRENT_LEGAL_ACCEPTANCE.termsUrl} target="_blank" rel="noreferrer" className="underline">{formatMessage({ id: "pages.resetPassword.termsLink" })}</a>,
+                      privacy: <a href={CURRENT_LEGAL_ACCEPTANCE.privacyUrl} target="_blank" rel="noreferrer" className="underline">{formatMessage({ id: "pages.resetPassword.privacyLink" })}</a>,
+                    }}
+                  />
+                </span>
+              </label>
+              {termsError ? <p className="mt-1 text-sans-small text-danger" role="alert">{termsError}</p> : null}
+            </div>
+          ) : null}
           <Button
             type="submit"
             disabled={loading}

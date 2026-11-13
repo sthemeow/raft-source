@@ -27,6 +27,7 @@ import { MemberActionsContext } from "./memberActionsContext";
 import { useMemberActions } from "./useMemberActions";
 import { usePinnedHeadRailInset } from "../../hooks/usePinnedHeadRailInset";
 import { InviteHumanDialog } from "../../components/member/DeferredInviteHumanDialog";
+import CreateMemberAccountDialog from "./CreateMemberAccountDialog";
 import PanelHeader from "../../components/ui/PanelHeader";
 import { useMobileBack } from "../../hooks/useAppNavigate";
 import { useServerPermissions } from "../../hooks/useServerPermissions";
@@ -239,6 +240,7 @@ export function MembersPage() {
   });
 
   const [showInvite, setShowInvite] = useState(false);
+  const [showCreateAccount, setShowCreateAccount] = useState(false);
   const openInvite = useCallback(() => setShowInvite(true), []);
   const closeInvite = useCallback(() => setShowInvite(false), []);
   const scopeLabel = formatMessage({ id: "members.page.filterLabel" });
@@ -509,6 +511,15 @@ export function MembersPage() {
                         {formatMessage({ id: "layout.sidebar.inviteHuman" })}
                       </DropdownMenuItem>
                     ) : null}
+                    {canInvite ? (
+                      <DropdownMenuItem
+                        onClick={() => { setShowCreateAccount(true); }}
+                        data-testid="members-more-create-account"
+                      >
+                        <UserPlus />
+                        {formatMessage({ id: "member.createAccount.menuItem" })}
+                      </DropdownMenuItem>
+                    ) : null}
                   </>
                 )}
                 data-testid="members-display-group"
@@ -559,6 +570,7 @@ export function MembersPage() {
         <div className="isolate" data-testid="members-body">{renderBody()}</div>
       </ScrollArea>
       {showInvite ? <InviteHumanDialog onClose={closeInvite} surface="members_page" /> : null}
+      {showCreateAccount ? <CreateMemberAccountDialog onClose={() => setShowCreateAccount(false)} /> : null}
       <MembersAddAgentDialogs step={addAgent} onStep={setAddAgent} />
       {memberDialogs}
     </div>

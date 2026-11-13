@@ -171,7 +171,16 @@ interface AuthState {
 
   // Password reset
   forgotPassword: (email: string) => Promise<void>;
-  resetPassword: (token: string, password: string) => Promise<void>;
+  /**
+   * `legal` is only sent for an administrator-created account's first password
+   * (the emailed `?reset=<token>&setup=1` link): the server records the terms
+   * the person accepted there. Ignored for an ordinary reset.
+   */
+  resetPassword: (token: string, password: string, legal?: {
+    acceptTerms: boolean;
+    termsVersion: string;
+    privacyVersion: string;
+  }) => Promise<void>;
 
   // Profile update
   updateProfile: (fields: {
@@ -702,8 +711,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await api.post("/auth/forgot-password", { email });
   },
 
-  resetPassword: async (token, password) => {
-    await api.post("/auth/reset-password", { token, password });
+  resetPassword: async (token, password, legal) => {
+    await api.post("/auth/reset-password", { token, password, ...(legal ?? {}) });
   },
 
   // ── Profile Update ──
