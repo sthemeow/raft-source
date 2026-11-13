@@ -2394,8 +2394,34 @@ authRouter.post("/reset-password", async (req, res) => {
       return;
     }
 
+    // An administrator-created account accepts the terms here, where the person
+    // is present (#Raft-Dev:a5519ad5). Accounts that already accepted are left
+    // alone: a later reset must not add a second acceptance row.
+    let legalRecorded = false;
+    if (result.userId && !(await userService.hasLegalAcceptance(result.userId))) {
+      const legal = parseLegalAcceptance(req.body);
+      try {
+        await userService.recordLegalAcceptance(
+          result.userId,
+          "invite",
+          legalAcceptanceService.getRequestLegalMetadata(req),
+          legal,
+        );
+        legalRecorded = true;
+      } catch (err) {
+        const legalResponse = legalAcceptanceService.legalAcceptanceErrorResponse(err);
+        if (legalResponse) {
+          // The password is already set; the account keeps working, but we do
+          // not pretend the terms were accepted.
+          res.status(legalResponse.status).json({ ...legalResponse.body, passwordSet: true });
+          return;
+        }
+        throw err;
+      }
+    }
+
     // Password update and session revocation committed together in the service.
-    res.json({ ok: true });
+    res.json({ ok: true, legalRecorded });
   } catch {
     res.status(500).json({ error: "Password reset failed" });
   }

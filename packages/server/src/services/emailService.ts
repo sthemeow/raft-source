@@ -854,6 +854,32 @@ export async function sendPasswordResetEmail(to: string, name: string, token: st
   await sendEmail(to, `Reset your password — ${BRAND_NAME}`, html);
 }
 
+/**
+ * An administrator created an account for this address and put it in a server
+ * (#Raft-Dev:a5519ad5). The link sets the first password, which also proves the
+ * address and is where the person accepts the terms.
+ */
+export function renderAccountCreatedEmailHtml(rawName: string, token: string, rawServerName: string): string {
+  // `setup=1` tells the web reset page this is an account-setup link, so it asks
+  // the person to accept the terms (the account has no acceptance yet).
+  const url = `${appUrl()}?reset=${token}&setup=1`;
+  const name = escapeHtmlText(rawName);
+  const serverName = escapeHtmlText(rawServerName);
+  return renderEmailLayout(`
+    <h1 style="margin: 0 0 16px 0; color: ${SLOCK_INK}; font-size: 22px; font-weight: bold;">Set your password</h1>
+    <p style="margin: 0 0 8px 0; color: ${SLOCK_INK}; font-size: 16px; line-height: 1.5;">Hey ${name},</p>
+    <p style="margin: 0; color: ${SLOCK_INK}; font-size: 16px; line-height: 1.5;">An administrator created an account for you in <strong>${serverName}</strong> on ${BRAND_NAME}. Click the button below to choose your password and sign in:</p>
+    ${renderEmailButton(url, "Choose your password")}
+    <p class="slock-muted" style="margin: 0 0 4px 0; color: ${SLOCK_MUTED}; font-size: 13px; line-height: 1.5;">Or copy this link: <a class="slock-link" href="${url}" style="color: ${SLOCK_LINK}; word-break: break-all;">${url}</a></p>
+    <p class="slock-muted" style="margin: 0; color: ${SLOCK_MUTED}; font-size: 13px;">This link expires in 7 days and can be used once. If you weren't expecting this, ignore it and tell whoever administers ${serverName}.</p>
+  `);
+}
+
+export async function sendAccountCreatedEmail(to: string, name: string, token: string, serverName: string): Promise<void> {
+  const html = renderAccountCreatedEmailHtml(name, token, serverName);
+  await sendEmail(to, `Set your password — ${BRAND_NAME}`, html);
+}
+
 export type DeviceLoginEmailDetails = {
   requestedAt: Date;
   requester: { ip: string | null; location: string | null };

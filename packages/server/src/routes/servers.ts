@@ -14,7 +14,7 @@ import { markAgentArchiveWorkspaceDeleted } from "../services/agentArchiveServic
 import { Router, type Request, type RequestHandler, type Router as RouterType } from "express";
 import { kickAppNotificationDelivery } from "../services/appNotificationDeliveryService";
 import multer from "multer";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { Server as SocketServer } from "socket.io";
 import { and, eq, isNull } from "drizzle-orm";
 import * as serverService from "../services/serverService";
@@ -36,6 +36,8 @@ import * as inviteService from "../services/inviteService";
 import * as seatJoinBlockService from "../services/seatJoinBlockService";
 import * as onboardingService from "../services/onboardingService";
 import * as userService from "../services/userService";
+import { sendAccountCreatedEmail } from "../services/emailService";
+import { deploymentUserLimitReached } from "../services/deploymentUserLimit";
 import * as serverAgreementService from "../services/serverAgreementService";
 import { countAgents, countMachines, countChannels, getHistoryCutoff, HumanSeatLimitError } from "../services/planService";
 import { notePaywallHit } from "./paywallHit";
@@ -2793,6 +2795,118 @@ serverRouter.post("/:id/invites", async (req, res) => {
         err,
       });
     }
+  }
+});
+
+// Create an account for someone who has none, and put it in this server
+// (#Raft-Dev:a5519ad5). Owner/admin only, like invites: this is the
+// administrator-made account §3 of the Raft License requires, done from the
+// web instead of by writing rows. The password nobody knows is replaced by the
+// one the person chooses from the emailed link, which also proves the address
+// and is where they accept the terms.
+serverRouter.post("/:id/members/create", async (req, res) => {
+  try {
+    const rawEmail = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+    if (!rawEmail) {
+      res.status(400).json({ error: "Email is required" });
+      return;
+    }
+    const emailError = validateEmailAddress(rawEmail);
+    if (emailError) {
+      res.status(400).json({ error: emailError });
+      return;
+    }
+    const rawName = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!rawName) {
+      res.status(400).json({ error: "Name is required" });
+      return;
+    }
+    const rawRole = req.body?.role;
+    if (rawRole !== undefined && rawRole !== "member" && rawRole !== "admin") {
+      res.status(400).json({ error: "role must be one of: member, admin" });
+      return;
+    }
+
+    const callerRole = await getActorServerRoleInServer(req.params.id, "user", req.userId!);
+    if (!actorRoleHasServerCapability(callerRole, "inviteMembers")) {
+      res.status(403).json({ error: "Only server owners and admins can create accounts" });
+      return;
+    }
+
+    const server = await serverService.getServer(req.params.id);
+    if (!server) {
+      res.status(404).json({ error: "Server not found" });
+      return;
+    }
+
+    // Refuse before creating anything when the seat would be refused anyway: a
+    // spare account with no server is exactly what we are trying to avoid.
+    if (await deploymentUserLimitReached()) {
+      res.status(403).json({
+        error: "This Raft Community Edition deployment already has 5 people, the Raft License limit.",
+        code: "deployment_user_limit_reached",
+      });
+      return;
+    }
+
+    const user = await userService.createUser(
+      rawEmail,
+      randomBytes(32).toString("hex"),
+      rawName,
+      {}, // accepted by the person at the set-password step, not here
+      {},
+      "invite",
+      { deferProfileSetup: true, createdByAdministrator: { actorUserId: req.userId! } },
+    );
+
+    try {
+      await serverService.addMember(req.params.id, user.id, rawRole ?? "member");
+    } catch (seatErr) {
+      // The authoritative limit check sits inside addMember: if it refuses, the
+      // fresh account has no seat and no content, so remove it rather than
+      // leaving a person who can never join.
+      await userService.deleteAccountCreatedWithoutSeat(user.id).catch((cleanupErr) => {
+        console.error("[servers] Could not remove the seatless account:", cleanupErr);
+      });
+      throw seatErr;
+    }
+
+    const setup = await userService.issueAccountSetupToken(rawEmail);
+    if (setup) {
+      // The account and seat exist already: a mail failure must not answer
+      // "failed" and invite a retry that then says the email is registered.
+      try {
+        await sendAccountCreatedEmail(rawEmail, rawName, setup.token, server.name);
+      } catch (err) {
+        console.error("[servers] Account-setup email failed after account creation:", err);
+      }
+    }
+
+    res.json({ userId: user.id, email: user.email });
+  } catch (err: any) {
+    const msg = err?.message || "";
+    if (msg === "Email is already registered") {
+      res.status(409).json({ error: "An account already exists for this email; invite them to this server instead" });
+      return;
+    }
+    if (err instanceof RefusalError) {
+      refuse(res, err.status, err.refusal);
+      return;
+    }
+    if (err instanceof HumanSeatLimitError) {
+      notePaywallHit(req, "seat_limit_invite");
+      res.status(400).json({ error: msg, code: err.code, capacityLimit: err.detail });
+      return;
+    }
+    if (msg === INVALID_EMAIL_MESSAGE || msg.includes("seat limit") || msg.includes("limit reached")) {
+      res.status(400).json({ error: msg });
+      return;
+    }
+    sendJsonServerError(req, res, {
+      error: "Failed to create the account",
+      logPrefix: "Create member account error:",
+      err,
+    });
   }
 });
 
