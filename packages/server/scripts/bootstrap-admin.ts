@@ -22,7 +22,7 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { closeDatabase, getDb, initDatabase } from "../src/db/index";
-import { users } from "../src/db/schema";
+import { servers, users } from "../src/db/schema";
 import { validateEmailAddress } from "@botiverse/raft-shared";
 import { sendAccountCreatedEmail } from "../src/services/emailService";
 import { appUrl } from "../src/platform/links";
@@ -54,11 +54,20 @@ async function main(): Promise<number> {
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
   await initDatabase(databaseUrl, undefined, { log: () => {} });
 
-  const [{ count }] = await getDb()
-    .select({ count: sql<number>`count(*)::int` })
+  // "Empty" means empty, not "no people": a database whose accounts were deleted
+  // but whose servers or agents survived is a partially cleared one, and seeding
+  // an owner into it would attach them to data nobody meant them to own.
+  const [{ accounts }] = await getDb()
+    .select({ accounts: sql<number>`count(*)::int` })
     .from(users);
-  if (Number(count) > 0) {
-    console.error(`Refusing: this deployment already has ${count} account(s). Bootstrap only runs on an empty one.`);
+  const [{ serverCount }] = await getDb()
+    .select({ serverCount: sql<number>`count(*)::int` })
+    .from(servers);
+  if (Number(accounts) > 0 || Number(serverCount) > 0) {
+    console.error(
+      `Refusing: this deployment is not empty (${accounts} account(s), ${serverCount} server(s)). `
+      + "Bootstrap only runs on a fresh database; inspect it first if you expected it to be empty.",
+    );
     return 2;
   }
 
