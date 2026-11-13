@@ -368,19 +368,10 @@ export async function createUser(
     verificationReturnTo?: string;
     /** Told whether the provider took the verification email (the product event `email_verification_sent`). */
     onVerificationEmail?: (result: "sent" | "failed") => void;
-    /**
-     * The account is being created by a server administrator for someone who
-     * is not present (#Raft-Dev:a5519ad5): no legal acceptance is recorded here
-     * (the person accepts at the set-password step, `recordLegalAcceptance`)
-     * and no verification email is sent (setting the password proves the
-     * address). The caller sends the account-setup email instead.
-     */
-    createdByAdministrator?: { actorUserId: string };
   } = {},
 ) {
   const db = getDb();
   const normalizedEmail = normalizeEmail(email);
-  const adminCreated = options.createdByAdministrator !== undefined;
 
   if (!options.deferProfileSetup && !name) {
     throw new Error("Username is required");
@@ -405,9 +396,7 @@ export async function createUser(
   let publicUser: PublicUser;
   try {
     publicUser = await db.transaction(async (transaction) => {
-      // An administrator-created account accepts the terms at the set-password
-      // step (the person is not here to accept them now).
-      const accepted = adminCreated ? null : legalAcceptanceService.requireCurrentLegalAcceptance(legalAcceptance);
+      const accepted = legalAcceptanceService.requireCurrentLegalAcceptance(legalAcceptance);
 
       const pendingHandle = options.deferProfileSetup ? createPendingHandle() : null;
       const suggestedHandle = options.deferProfileSetup
@@ -426,19 +415,15 @@ export async function createUser(
           ? hashToken(options.stagingSelfAccountCapability)
           : null,
         // Signed up on a page without the usage-data clause: not told, not on.
-        ...(accepted === null || !accepted.sawUsageDataNotice ? { shareUsageData: false } : {}),
+        ...(accepted.sawUsageDataNotice ? {} : { shareUsageData: false }),
       }).returning();
 
-      if (accepted !== null) {
-        await legalAcceptanceService.insertUserLegalAcceptance(transaction, user.id, legalSource, legalMetadata, accepted);
-      }
-      if (!adminCreated) {
-        await transaction.insert(emailVerifications).values({
-          userId: user.id,
-          tokenHash: hashToken(token),
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
-        });
-      }
+      await legalAcceptanceService.insertUserLegalAcceptance(transaction, user.id, legalSource, legalMetadata, accepted);
+      await transaction.insert(emailVerifications).values({
+        userId: user.id,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
+      });
 
       return toPublicUser(user);
     });
@@ -453,14 +438,12 @@ export async function createUser(
   // must not turn a created account into "Registration failed" (the retry then
   // says "already registered"). The user lands on the verify-email screen and
   // can resend from there (task #55).
-  if (!adminCreated) {
-    try {
-      await sendVerificationEmail(normalizedEmail, options.deferProfileSetup ? "there" : name!, token, options.verificationReturnTo);
-      options.onVerificationEmail?.("sent");
-    } catch (err) {
-      console.error("[userService] Verification email failed after account creation:", serializeErrorForLog(err));
-      options.onVerificationEmail?.("failed");
-    }
+  try {
+    await sendVerificationEmail(normalizedEmail, options.deferProfileSetup ? "there" : name!, token, options.verificationReturnTo);
+    options.onVerificationEmail?.("sent");
+  } catch (err) {
+    console.error("[userService] Verification email failed after account creation:", serializeErrorForLog(err));
+    options.onVerificationEmail?.("failed");
   }
 
   if (!options.deferProfileSetup) {
@@ -1249,6 +1232,61 @@ export async function createSocialUser(
  * credential, and profile setup is deferred. A unique violation (someone took
  * the email or handle meanwhile) propagates for the caller to retry.
  */
+/**
+ * Creates a human account inside the caller's transaction — the one shape every
+ * path that turns "a person exists" into "a person holds an account" uses
+ * (#Raft-Dev:a5519ad5). SSO passes the terms the person just accepted and a
+ * verified address; an administrator creating the account passes neither, and
+ * the person accepts at the set-password step instead (recordLegalAcceptance).
+ *
+ * It does not check the registration policy: each caller owns that decision
+ * (SSO refuses when `/auth/register` is closed; an administrator-created
+ * account is the way round that closure).
+ */
+export async function createHumanAccountInTransaction(
+  tx: DatabaseExecutor,
+  input: {
+    email: string;
+    displayName: string | null;
+    /** Terms the person accepted now. Omitted when the account is created for them. */
+    legal?: {
+      acceptance: legalAcceptanceService.LegalAcceptanceInput;
+      metadata?: legalAcceptanceService.LegalAcceptanceMetadata;
+      source: legalAcceptanceService.LegalAcceptanceSource;
+    } | null;
+    /** Whether the address is vouched for (the IdP's claim, or an administrator). */
+    emailVerified: boolean;
+    /** The server the account is joining: decides its avatar. `null` when none. */
+    joiningServerId: string | null;
+  },
+): Promise<{ id: string; email: string }> {
+  const normalizedEmail = normalizeEmail(input.email);
+  const accepted = input.legal
+    ? legalAcceptanceService.requireCurrentLegalAcceptance(input.legal.acceptance)
+    : null;
+  const displayName = input.displayName?.trim() || null;
+  const suggestedHandle = await generateAvailableUserName(displayName || normalizedEmail.split("@")[0] || "user", tx);
+  const [created] = await tx.insert(users).values({
+    email: normalizedEmail,
+    name: createPendingHandle(),
+    displayName: displayName ?? suggestedHandle,
+    avatarUrl: await newAccountAvatarUrlFor(input.joiningServerId, tx),
+    // A password nobody knows: the person sets their own (email link) or signs in
+    // through the IdP. Never a shared or default value.
+    passwordHash: await argon2.hash(randomBytes(32).toString("hex")),
+    emailVerified: input.emailVerified,
+    profileSetupCompletedAt: null,
+    profileSetupSuggestedHandle: suggestedHandle,
+    ...(accepted?.sawUsageDataNotice ? {} : { shareUsageData: false }),
+  }).returning({ id: users.id, email: users.email });
+  if (accepted && input.legal) {
+    await legalAcceptanceService.insertUserLegalAcceptance(
+      tx, created!.id, input.legal.source, input.legal.metadata ?? {}, accepted,
+    );
+  }
+  return created!;
+}
+
 export async function createSsoUserInTransaction(
   tx: DatabaseExecutor,
   input: {
@@ -1260,24 +1298,14 @@ export async function createSsoUserInTransaction(
     joiningServerId: string;
   },
 ): Promise<{ id: string; email: string }> {
-  const normalizedEmail = normalizeEmail(input.email);
-  const accepted = legalAcceptanceService.requireCurrentLegalAcceptance(input.legalAcceptance);
   assertRegistrationEnabled();
-  const displayName = input.displayName?.trim() || null;
-  const suggestedHandle = await generateAvailableUserName(displayName || normalizedEmail.split("@")[0] || "user", tx);
-  const [created] = await tx.insert(users).values({
-    email: normalizedEmail,
-    name: createPendingHandle(),
-    displayName: displayName ?? suggestedHandle,
-    avatarUrl: await newAccountAvatarUrlFor(input.joiningServerId, tx),
-    passwordHash: await argon2.hash(randomBytes(32).toString("hex")),
+  return createHumanAccountInTransaction(tx, {
+    email: input.email,
+    displayName: input.displayName,
+    legal: { acceptance: input.legalAcceptance, metadata: input.legalMetadata, source: "oauth" },
     emailVerified: true,
-    profileSetupCompletedAt: null,
-    profileSetupSuggestedHandle: suggestedHandle,
-    ...(accepted.sawUsageDataNotice ? {} : { shareUsageData: false }),
-  }).returning({ id: users.id, email: users.email });
-  await legalAcceptanceService.insertUserLegalAcceptance(tx, created!.id, "oauth", input.legalMetadata ?? {}, accepted);
-  return created!;
+    joiningServerId: input.joiningServerId,
+  });
 }
 
 // ── Email Verification ──
@@ -1449,61 +1477,8 @@ export async function completeProfile(
 
 // ── Password Reset ──
 
-/**
- * A one-time token that lets an administrator-created account set its password
- * (#Raft-Dev:a5519ad5). Same table and single-use semantics as a password
- * reset; the caller sends its own email, so the copy can say an administrator
- * created the account rather than "someone requested a reset". Later resets
- * expire it. Returns null when no account holds the address.
- */
-export async function issueAccountSetupToken(email: string): Promise<{ token: string; userId: string } | null> {
+export async function requestPasswordReset(email: string): Promise<void> {
   const db = getDb();
-  const normalizedEmail = normalizeEmail(email);
-  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, normalizedEmail));
-  if (!user) return null;
-  // Expire any earlier link so only the newest one works (as requestPasswordReset does).
-  await db.update(passwordResets).set({ expiresAt: new Date(0) }).where(eq(passwordResets.userId, user.id));
-  const token = randomBytes(32).toString("hex");
-  await db.insert(passwordResets).values({
-    userId: user.id,
-    tokenHash: hashToken(token),
-    // Longer than a reset: the person may not read the email today.
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-  });
-  return { token, userId: user.id };
-}
-
-/**
- * Removes an account that was just created for an administrator and never got
- * a seat (the seat was refused): it has no content, no legal acceptance, no
- * sessions, so deleting the row is safe. Only for that immediate compensation.
- */
-export async function deleteAccountCreatedWithoutSeat(userId: string): Promise<void> {
-  await getDb().delete(users).where(eq(users.id, userId));
-}
-
-/** Whether this account ever accepted the terms (an administrator-created account has not, yet). */
-export async function hasLegalAcceptance(userId: string): Promise<boolean> {
-  const [row] = await getDb().select({ id: userLegalAcceptances.id })
-    .from(userLegalAcceptances).where(eq(userLegalAcceptances.userId, userId)).limit(1);
-  return row !== undefined;
-}
-
-/**
- * Records the terms a person accepted at the set-password step of an
- * administrator-created account, when they are present to accept them.
- */
-export async function recordLegalAcceptance(
-  userId: string,
-  source: legalAcceptanceService.LegalAcceptanceSource,
-  metadata: legalAcceptanceService.LegalAcceptanceMetadata,
-  input: legalAcceptanceService.LegalAcceptanceInput,
-): Promise<void> {
-  const accepted = legalAcceptanceService.requireCurrentLegalAcceptance(input);
-  await legalAcceptanceService.insertUserLegalAcceptance(getDb(), userId, source, metadata, accepted);
-}
-
-export async function requestPasswordReset(email: string): Promise<void> {  const db = getDb();
   const normalizedEmail = normalizeEmail(email);
 
   const [user] = await db.select({ id: users.id, name: users.name, email: users.email })
@@ -1534,6 +1509,46 @@ export async function requestPasswordReset(email: string): Promise<void> {  cons
   });
 
   await sendPasswordResetEmail(user.email, user.name, token);
+}
+
+/**
+ * A one-time token that lets an administrator-created account set its password
+ * (#Raft-Dev:a5519ad5). Same table and single-use semantics as a password reset;
+ * the caller sends its own email, so the copy can say an administrator created
+ * the account. A later reset expires it.
+ */
+export async function issueAccountSetupToken(email: string): Promise<{ token: string; userId: string } | null> {
+  const db = getDb();
+  const normalizedEmail = normalizeEmail(email);
+  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.email, normalizedEmail));
+  if (!user) return null;
+  await db.update(passwordResets).set({ expiresAt: new Date(0) }).where(eq(passwordResets.userId, user.id));
+  const token = randomBytes(32).toString("hex");
+  await db.insert(passwordResets).values({
+    userId: user.id,
+    tokenHash: hashToken(token),
+    // Longer than a reset: the person may not read the email today.
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  });
+  return { token, userId: user.id };
+}
+
+/** Whether this account ever accepted the terms (an administrator-created account has not, yet). */
+export async function hasLegalAcceptance(userId: string): Promise<boolean> {
+  const [row] = await getDb().select({ id: userLegalAcceptances.id })
+    .from(userLegalAcceptances).where(eq(userLegalAcceptances.userId, userId)).limit(1);
+  return row !== undefined;
+}
+
+/** Records the terms a person accepted at the set-password step of an administrator-created account. */
+export async function recordLegalAcceptance(
+  userId: string,
+  source: legalAcceptanceService.LegalAcceptanceSource,
+  metadata: legalAcceptanceService.LegalAcceptanceMetadata,
+  input: legalAcceptanceService.LegalAcceptanceInput,
+): Promise<void> {
+  const accepted = legalAcceptanceService.requireCurrentLegalAcceptance(input);
+  await legalAcceptanceService.insertUserLegalAcceptance(getDb(), userId, source, metadata, accepted);
 }
 
 export async function resetPassword(token: string, newPassword: string): Promise<{ success: boolean; userId?: string }> {

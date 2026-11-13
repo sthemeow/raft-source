@@ -5,6 +5,7 @@ import { CURRENT_LEGAL_ACCEPTANCE } from "@botiverse/raft-shared";
 import { getDb } from "../db/index";
 import { passwordResets, serverMembers, userLegalAcceptances, users } from "../db/schema";
 import { createServer } from "../services/serverService";
+import { getDb as db } from "../db/index";
 import * as userService from "../services/userService";
 import { createApiTest } from "../test/integration/apiTest";
 import { seedUser } from "../test/externalInviteFixture";
@@ -130,4 +131,30 @@ test("at the licence limit nothing is created, and no seatless account is left b
 
   const [leftover] = await getDb().select().from(users).where(eq(users.email, email));
   assert.equal(leftover, undefined, "no account was left without a seat");
+});
+
+// The shared in-transaction creator is also what SSO calls
+// (createSsoUserInTransaction delegates to it). SSO's own suite cannot run in
+// this source-available snapshot — the edition gate refuses every SSO route —
+// so this covers the creation half directly.
+test("the SSO account helper still records the terms it was given", async ({ app }) => {
+  // Taking `app` initialises the database this test then uses directly.
+  assert.ok(app.baseUrl);
+  const email = `sso-${randomBytes(4).toString("hex")}@slock.test`;
+  const { createSsoUserInTransaction } = userService;
+  const created = await db().transaction((tx) => createSsoUserInTransaction(tx, {
+    email,
+    displayName: "SSO Person",
+    legalAcceptance: {
+      acceptTerms: true,
+      termsVersion: CURRENT_LEGAL_ACCEPTANCE.termsVersion,
+      privacyVersion: CURRENT_LEGAL_ACCEPTANCE.privacyVersion,
+    },
+    joiningServerId: null as unknown as string,
+  }));
+
+  const [account] = await getDb().select().from(users).where(eq(users.id, created.id));
+  assert.equal(account!.emailVerified, true, "the IdP claim vouches for the address");
+  const [acceptance] = await getDb().select().from(userLegalAcceptances).where(eq(userLegalAcceptances.userId, created.id));
+  assert.equal(acceptance!.source, "oauth");
 });

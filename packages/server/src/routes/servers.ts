@@ -14,7 +14,7 @@ import { markAgentArchiveWorkspaceDeleted } from "../services/agentArchiveServic
 import { Router, type Request, type RequestHandler, type Router as RouterType } from "express";
 import { kickAppNotificationDelivery } from "../services/appNotificationDeliveryService";
 import multer from "multer";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { Server as SocketServer } from "socket.io";
 import { and, eq, isNull } from "drizzle-orm";
 import * as serverService from "../services/serverService";
@@ -37,7 +37,7 @@ import * as seatJoinBlockService from "../services/seatJoinBlockService";
 import * as onboardingService from "../services/onboardingService";
 import * as userService from "../services/userService";
 import { sendAccountCreatedEmail } from "../services/emailService";
-import { deploymentUserLimitReached } from "../services/deploymentUserLimit";
+import { createHumanAccountForServer, EmailAlreadyRegisteredError } from "../services/humanAccountService";
 import * as serverAgreementService from "../services/serverAgreementService";
 import { countAgents, countMachines, countChannels, getHistoryCutoff, HumanSeatLimitError } from "../services/planService";
 import { notePaywallHit } from "./paywallHit";
@@ -2839,37 +2839,14 @@ serverRouter.post("/:id/members/create", async (req, res) => {
       return;
     }
 
-    // Refuse before creating anything when the seat would be refused anyway: a
-    // spare account with no server is exactly what we are trying to avoid.
-    if (await deploymentUserLimitReached()) {
-      res.status(403).json({
-        error: "This Raft Community Edition deployment already has 5 people, the Raft License limit.",
-        code: "deployment_user_limit_reached",
-      });
-      return;
-    }
-
-    const user = await userService.createUser(
-      rawEmail,
-      randomBytes(32).toString("hex"),
-      rawName,
-      {}, // accepted by the person at the set-password step, not here
-      {},
-      "invite",
-      { deferProfileSetup: true, createdByAdministrator: { actorUserId: req.userId! } },
-    );
-
-    try {
-      await serverService.addMember(req.params.id, user.id, rawRole ?? "member");
-    } catch (seatErr) {
-      // The authoritative limit check sits inside addMember: if it refuses, the
-      // fresh account has no seat and no content, so remove it rather than
-      // leaving a person who can never join.
-      await userService.deleteAccountCreatedWithoutSeat(user.id).catch((cleanupErr) => {
-        console.error("[servers] Could not remove the seatless account:", cleanupErr);
-      });
-      throw seatErr;
-    }
+    // The account and its seat are one transaction (humanAccountService): the
+    // licence limit decides inside it, so a refusal leaves nothing behind.
+    const user = await createHumanAccountForServer({
+      serverId: req.params.id,
+      email: rawEmail,
+      displayName: rawName,
+      role: rawRole ?? "member",
+    });
 
     const setup = await userService.issueAccountSetupToken(rawEmail);
     if (setup) {
@@ -2885,7 +2862,8 @@ serverRouter.post("/:id/members/create", async (req, res) => {
     res.json({ userId: user.id, email: user.email });
   } catch (err: any) {
     const msg = err?.message || "";
-    if (msg === "Email is already registered") {
+    // A concurrent create can still lose the race at the unique index (23505).
+    if (err instanceof EmailAlreadyRegisteredError || msg === "Email is already registered" || err?.code === "23505") {
       res.status(409).json({ error: "An account already exists for this email; invite them to this server instead" });
       return;
     }
