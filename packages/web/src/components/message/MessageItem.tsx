@@ -1363,6 +1363,7 @@ interface MessageItemProps {
   canReact?: boolean;
   /** Render the canonical message row for a narrow, anonymous/read-only DTO. */
   readOnlyProjection?: boolean;
+  hideChannelAgentMuteBadge?: boolean;
   /** Extra classes for the row root — per-theme alignment offsets (e.g. the
    *  avatar/header-icon-column correction) live at the callsite. */
   className?: string;
@@ -1864,7 +1865,7 @@ function taskAssigneeHandle(claimedByName: string) {
 
 const ignoreReadOnlyProjectionNavigation = () => undefined;
 
-const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMessage, mentionMap, channels, previewSenderAgent, previewSenderMember, channelParticipantAgentsById, channelParticipantMembersById, channelParticipantExternalsById, threadSummary, parentChannelId, parentMessageId, hideThreadActions, showThreadFollowAction, linkedTask: linkedTaskProp, linkedTasks, senderAvatarTestId, mentionComposerChannelId, reactionParentScopeKey, canReact: canReactProp = true, readOnlyProjection = false, readOnlySender, readOnlyReplyScope, onReadOnlyNavigateChannel, onBeforeOpenThread, onOpenThread, onOpenProfile, threadSearchHighlightQuery, threadSearchActive, located = false, groupState, followedBy, showDmReadStatus = false, taskHandoffReturn = null, className }: MessageItemProps) {
+const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMessage, mentionMap, channels, previewSenderAgent, previewSenderMember, channelParticipantAgentsById, channelParticipantMembersById, channelParticipantExternalsById, threadSummary, parentChannelId, parentMessageId, hideThreadActions, showThreadFollowAction, linkedTask: linkedTaskProp, linkedTasks, senderAvatarTestId, mentionComposerChannelId, reactionParentScopeKey, canReact: canReactProp = true, readOnlyProjection = false, hideChannelAgentMuteBadge = false, readOnlySender, readOnlyReplyScope, onReadOnlyNavigateChannel, onBeforeOpenThread, onOpenThread, onOpenProfile, threadSearchHighlightQuery, threadSearchActive, located = false, groupState, followedBy, showDmReadStatus = false, taskHandoffReturn = null, className }: MessageItemProps) {
   // RFC 077: a retracted message (sent by an assistant, taken back by its
   // owner) is a single non-interactive record: its sender, time, delegated
   // marks and thread replies stay; its words, attachments, link previews,
@@ -1901,7 +1902,7 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
   const isAgent = message.senderType === "agent";
   const deliveryChannelId = isAgent && !readOnlyProjection && !parentMessageId
     ? (parentChannelId || message.channelId) : null;
-  const deliveryMuted = useChannelAgentMuted(deliveryChannelId, isAgent ? message.senderId : null);
+  const deliveryMuted = useChannelAgentMuted(hideChannelAgentMuteBadge ? null : deliveryChannelId, isAgent ? message.senderId : null);
   const isExternal = message.senderType === "external_projection";
   // RFC 077: sent by the sender's assistant for them, and retracted by them.
   const delegatedByRaw = (message as { delegatedBy?: unknown }).delegatedBy;

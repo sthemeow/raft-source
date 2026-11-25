@@ -201,6 +201,7 @@ export function useThreadTimelineRows({
                   channels={channels}
                   parentChannelId={parentChannelId || undefined}
                   parentMessageId={parentMessageId || undefined}
+                  hideChannelAgentMuteBadge={threadPaywallScope === "task"}
                   previewSenderAgent={getPreviewSenderAgent(originalMessage)}
                   previewSenderMember={getPreviewSenderMember(originalMessage)}
                   channelParticipantExternalsById={externalById}
@@ -232,6 +233,7 @@ export function useThreadTimelineRows({
           channels={channels}
           parentChannelId={parentChannelId || undefined}
           parentMessageId={parentMessageId || undefined}
+          hideChannelAgentMuteBadge={threadPaywallScope === "task"}
           previewSenderAgent={getPreviewSenderAgent(msg)}
           previewSenderMember={getPreviewSenderMember(msg)}
           channelParticipantExternalsById={externalById}
@@ -250,7 +252,7 @@ export function useThreadTimelineRows({
         />
       </div>
     );
-  }, [activeThreadSearchMessageId, canReactToThread, channels, dmThreadReadStatusMessageId, expandedSystemMessageGroups, externalById, getPreviewSenderAgent, getPreviewSenderMember, handoffReturns, locatedReplyId, mentionMap, messageGrouping, messages, onOpenProfile, parentChannelId, parentMessageId, systemMessageRenderStates, threadMentionComposerChannelId, threadReactionParentScopeKey, threadSearchQuery, toggleSystemMessageGroup]);
+  }, [activeThreadSearchMessageId, canReactToThread, channels, dmThreadReadStatusMessageId, expandedSystemMessageGroups, externalById, getPreviewSenderAgent, getPreviewSenderMember, handoffReturns, locatedReplyId, mentionMap, messageGrouping, messages, onOpenProfile, parentChannelId, parentMessageId, systemMessageRenderStates, threadMentionComposerChannelId, threadPaywallScope, threadReactionParentScopeKey, threadSearchQuery, toggleSystemMessageGroup]);
   // Stryker restore all
 
   // Stryker disable all: focused sender-name mention behavior is covered through MessageItem/MessageInput; this memo only duplicates thread parent pass-through and dependency invalidation.

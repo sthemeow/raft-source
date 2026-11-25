@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import type { AgentMessage, ChannelAgentDeliveryChange, ChannelAgentDeliveryState } from "@botiverse/raft-shared";
+import { eq } from "drizzle-orm";
+import { getDb } from "../db/index";
+import { messages } from "../db/schema";
 import type { AgentOrchestrator } from "../services/agentOrchestrator";
 import { createAgent } from "../services/agentService";
 import { addAgent, addHuman, createChannel, getActivityMutedAgentIdsForMessage } from "../services/channelService";
@@ -84,6 +87,11 @@ test("bulk mute shares individual settings, skips unchanged Agents, and keeps ch
   assert.equal(received.length, 0);
   const mention = await post(`Attention @${second.name}`);
   assert.equal(received.some(item => item.agentId === second.id && item.message.mentioned), true);
+  const afterMention = await post("Ordinary chat after the unread mention");
+  const legacyTask = await post("Task assigned to the muted agent without an @mention");
+  // The legacy assignment fields are on the chat row, independent of mentions.
+  await getDb().update(messages).set({ taskAssigneeType: "agent", taskAssigneeId: second.id })
+    .where(eq(messages.id, legacyTask.id));
 
   assert.equal((await selfMute(firstKey, "unmute")).status, 200);
   const selfUnmuted = await (await fetch(url, { headers: memberHeaders })).json() as ChannelAgentDeliveryState;
@@ -95,7 +103,16 @@ test("bulk mute shares individual settings, skips unchanged Agents, and keeps ch
   const notices = received.filter(item => item.message.third_party_event?.system_app === "system.channel-mute");
   assert.equal(notices.length, 1);
   assert.equal(notices[0]?.agentId, second.id);
-  assert.match(notices[0]?.message.content ?? "", /1 ordinary message was unread/);
+  const notice = notices[0]?.message.content ?? "";
+  assert.equal(notice.split("\n")[0],
+    "System notification: A channel administrator turned off your mute in #delivery. "
+    + "2 ordinary messages posted there while you were muted are still unread. "
+    + "Only messages that @mention you directly or assign you a task still need a response. "
+    + "This notice and those ordinary messages need no reply.");
+  assert.ok(!received.some(item => item.message.message_id === suppressed.id));
+  const directAfterUnmute = await post(`New question @${second.name}`);
+  assert.ok(received.some(item => item.agentId === second.id
+    && item.message.message_id === directAfterUnmute.id && item.message.mentioned));
   const noticeId = notices[0]?.message.message_id;
   assert.ok(noticeId);
   const noticeUrl = `${app.baseUrl}/internal/agent-api/history?channel=agent-event:${noticeId}`;
@@ -106,6 +123,7 @@ test("bulk mute shares individual settings, skips unchanged Agents, and keeps ch
   const resumed = await getAgentResumeCatchupMessages(second.id, undefined, { chain: inbox });
   assert.ok(resumed.messages.some(message => message.message_id === suppressed.id));
   assert.ok(resumed.messages.some(message => message.message_id === mention.id));
+  assert.ok(resumed.messages.some(message => message.message_id === afterMention.id));
 
   assert.deepEqual(await getActivityMutedAgentIdsForMessage({
     serverId: server.id, sourceChannelId: channel.id, agentIds: [first.id, second.id], messageSeq: suppressed.seq,
@@ -136,6 +154,7 @@ test("channel mute applies to new members, and repeated toggles do not notify fo
   const received: AgentMessage[] = [];
   const orchestrator = withChannelDelivery({
     async deliverMessage(_agentId: string, message: AgentMessage) { received.push(message); },
+    async acknowledgeDeliveredMessages() {},
   }) as unknown as AgentOrchestrator;
   app.app.set("agentOrchestrator", orchestrator);
   const post = (content: string) => broadcastAndDeliver(app.io, orchestrator, {
@@ -178,11 +197,23 @@ test("channel mute applies to new members, and repeated toggles do not notify fo
   const noticeId = notices()[0]?.message_id;
   const noticeUrl = `${app.baseUrl}/internal/agent-api/history?channel=agent-event:${noticeId}`;
   assert.equal((await fetch(noticeUrl, { headers: jsonHeaders(key) })).status, 200);
+  // The previous mute's messages can remain unread without triggering a new notice.
+  await setMute(true);
+  await setMute(false);
+  assert.equal(notices().length, 1);
+  await setMute(true);
+  await post(`Only a mention during this mute @${agent.name}`);
+  await setMute(false);
+  assert.equal(notices().length, 1);
   await setMute(true);
   await post("New ordinary message after reading the first notice");
   await setMute(false);
   assert.equal(notices().length, 2);
-  assert.match(notices()[1]?.content ?? "", /3 ordinary messages were unread/);
+  assert.equal(notices()[1]?.content.split("\n")[0],
+    "System notification: A channel administrator turned off your mute in #mute-resume. "
+    + "1 ordinary message posted there while you were muted is still unread. "
+    + "Only messages that @mention you directly or assign you a task still need a response. "
+    + "This notice and that ordinary message need no reply.");
 
   await addAgent(channel.id, nextAgent.id);
   const joined = await (await fetch(url, { headers: auth })).json() as ChannelAgentDeliveryState;

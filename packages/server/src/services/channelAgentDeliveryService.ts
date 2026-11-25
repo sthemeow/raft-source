@@ -81,7 +81,7 @@ export async function getChannelAgentDelivery(viewer: Viewer) {
   return (await readDeliveryState(viewer, getDb())).state;
 }
 
-async function countUnreadChannelMessages(
+async function countUnreadMutedMessages(
   tx: DatabaseExecutor,
   channelId: string,
   readChannelIds: string[],
@@ -94,14 +94,14 @@ async function countUnreadChannelMessages(
     eq(agentChannelReadCursors.channelId, channelId),
     eq(agentChannelReadCursors.agentId, agentId),
   ));
-  const [row] = await tx.select({
-    total: count(),
-    duringMute: sql<number>`COUNT(*) FILTER (WHERE ${gte(messages.seq, muteFromSeq)})`.mapWith(Number),
-  }).from(messages).where(and(
+  const [row] = await tx.select({ count: count() }).from(messages).where(and(
     resolvedConversionReadChannelPredicate(messages.channelId, readChannelIds),
     gt(messages.seq, cursor?.seq ?? 0),
+    gte(messages.seq, muteFromSeq),
     sql`${messages.messageType} IS DISTINCT FROM 'system'`,
     sql`NOT COALESCE(${messages.senderType} = 'agent' AND ${messages.senderId} = ${agentId}, FALSE)`,
+    sql`NOT COALESCE(${messages.senderType} <> 'external_projection'
+      AND ${messages.taskAssigneeType} = 'agent' AND ${messages.taskAssigneeId} = ${agentId}, FALSE)`,
     notExists(tx.select({ id: messageMentions.messageId }).from(messageMentions).where(and(
       eq(messageMentions.messageId, messages.id),
       eq(messageMentions.targetType, "agent"),
@@ -109,7 +109,7 @@ async function countUnreadChannelMessages(
       sql`(${messageMentions.notifiableAtSend} OR ${messageMentions.notifiedAt} IS NOT NULL)`,
     ))),
   ));
-  return row ?? { total: 0, duringMute: 0 };
+  return row?.count ?? 0;
 }
 
 const UNMUTE_NOTICE_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -134,8 +134,8 @@ async function queueUnmuteNotice(
     )).limit(1);
   if (pending) return null;
 
-  const unread = await countUnreadChannelMessages(tx, viewer.channelId, readChannelIds, agentId, muteFromSeq);
-  if (unread.duringMute === 0) return null;
+  const unread = await countUnreadMutedMessages(tx, viewer.channelId, readChannelIds, agentId, muteFromSeq);
+  if (unread === 0) return null;
 
   return createSystemAppAgentEvent({
     executor: tx,
@@ -143,10 +143,15 @@ async function queueUnmuteNotice(
     agentId,
     systemApp: CHANNEL_MUTE_SYSTEM_APP,
     kind: "notification",
-    summary: `A channel administrator changed your mute setting in #${channelName}. Check the channel for its current setting. `
-      + `At that point, ${unread.total} ordinary ${unread.total === 1 ? "message was" : "messages were"} unread in the channel. `
-      + "Use messages from the mute period as context and reply only if they still need attention. Handle direct @mentions as usual.",
-    payload: { ordinaryUnreadAtChange: unread.total },
+    summary: `A channel administrator turned off your mute in #${channelName}. `
+      + (unread === 1
+        ? "1 ordinary message posted there while you were muted is still unread."
+        : `${unread} ordinary messages posted there while you were muted are still unread.`)
+      + " Only messages that @mention you directly or assign you a task still need a response."
+      + (unread === 1
+        ? " This notice and that ordinary message need no reply."
+        : " This notice and those ordinary messages need no reply."),
+    payload: {},
     ttlMs: UNMUTE_NOTICE_TTL_MS,
     now,
     objectRef,
