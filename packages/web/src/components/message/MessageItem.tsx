@@ -200,6 +200,8 @@ import { formatAgentDisplayStateText } from "../../utils/activity";
 import AvatarSlot from "../ui/AvatarSlot";
 import ContextMenuDivider from "../ui/ContextMenuDivider";
 import MenuItem from "../ui/MenuItem";
+import { ChannelAgentDeliveryAction, ChannelAgentMuteBadge } from "../channel/ChannelAgentDeliveryControls";
+import { useChannelAgentMuted } from "../../store/channelAgentDelivery";
 import { ViewContextMenuGroup } from "../agentContextView/ViewContextMenuGroup";
 import { openAgentContextViewFor } from "../agentContextView/agentContextViewState";
 import DismissBackdrop from "../ui/DismissBackdrop";
@@ -1487,6 +1489,7 @@ function MessageSenderAvatar({
   hoverAgent,
   hoverMember,
   readOnlySender,
+  deliveryMuted,
   externalAvatarUrl,
   externalDisplayName,
   externalProvider,
@@ -1515,6 +1518,7 @@ function MessageSenderAvatar({
   hoverAgent?: Agent | null;
   hoverMember?: ServerMember | null;
   readOnlySender?: ReadOnlySenderProjection;
+  deliveryMuted?: boolean;
   externalAvatarUrl?: string | null;
   externalDisplayName: string;
   externalProvider?: string | null;
@@ -1703,7 +1707,7 @@ function MessageSenderAvatar({
                   <AgentStatusDot agentId={senderId} fallbackAgent={hoverAgent} />
                 ) : undefined}
                 className={isDeactivatedAgent ? "grayscale opacity-dimmed" : ""}
-                corner={<AvatarOriginCorner origin={origin} />}
+                corner={deliveryMuted ? <ChannelAgentMuteBadge /> : <AvatarOriginCorner origin={origin} />}
               />
             </button>
           }
@@ -1895,6 +1899,9 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
   ));
   const quoteJumpPassage = useQuoteJumpPassageHighlight(message.id, readOnlyProjection);
   const isAgent = message.senderType === "agent";
+  const deliveryChannelId = isAgent && !readOnlyProjection && !parentMessageId
+    ? (parentChannelId || message.channelId) : null;
+  const deliveryMuted = useChannelAgentMuted(deliveryChannelId, isAgent ? message.senderId : null);
   const isExternal = message.senderType === "external_projection";
   // RFC 077: sent by the sender's assistant for them, and retracted by them.
   const delegatedByRaw = (message as { delegatedBy?: unknown }).delegatedBy;
@@ -2216,8 +2223,9 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
     }
     openConversationAgentProfile(useProfileStore.getState().openProfile, agentId, {
       openSource: parentMessageId ? "thread" : "channel",
+      channelId: deliveryChannelId,
     });
-  }, [mentionMap, onOpenProfile, parentMessageId, senderAgent, serverId]);
+  }, [deliveryChannelId, mentionMap, onOpenProfile, parentMessageId, senderAgent, serverId]);
 
   // Opens the SAME profile panel as clicking the mention, just landing on the
   // activity tab. Deliberately not a route change to /agent/:id — every other
@@ -4129,6 +4137,7 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
           showExternal={isExternal}
           externalAnonymous={message.externalAuthor?.identityKind === "anonymous"}
           isDeactivatedAgent={isDeactivatedAgent}
+          deliveryMuted={deliveryMuted}
           senderId={message.senderId}
           agentAvatarUrl={agentAvatarUrl}
           avatarUrl={humanAvatarUrl}
@@ -5071,6 +5080,14 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
               {formatMessage({ id: "message.messageItem.copyHandle" })}
             </MenuItem>
           ) : null}
+          {deliveryChannelId && (
+            <ChannelAgentDeliveryAction
+              channelId={deliveryChannelId}
+              agentId={message.senderId}
+              presentation="menu"
+              onApplied={closeSenderCtxMenu}
+            />
+          )}
         </AnchoredMenuPopover>
       </>
     )}

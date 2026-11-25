@@ -543,7 +543,7 @@ async function executeMentionActionForRow(
       if (!usersFirst) return null;
       const membershipChannelId = isSubConversationRow(row) ? threadAddParentChannelId! : row.channelId;
       const [lockedChannel] = await tx
-        .select({ id: channels.id, type: channels.type, archivedAt: channels.archivedAt, deletedAt: channels.deletedAt })
+        .select({ id: channels.id, type: channels.type, serverId: channels.serverId, muteNewAgents: channels.muteNewAgents, archivedAt: channels.archivedAt, deletedAt: channels.deletedAt })
         .from(channels)
         .where(and(eq(channels.id, membershipChannelId), eq(channels.serverId, serverId)))
         .for("update")
@@ -604,6 +604,9 @@ async function executeMentionActionForRow(
           membershipChannelId,
           isSubConversationRow(row) ? undefined : row.messageSeq - 1,
         );
+      }
+      if (joinedChannel.length > 0 && row.targetType === "agent") {
+        await channelService.applyChannelAgentJoinMute(tx, lockedChannel, row.targetId);
       }
       // The person who acted admitted them; an agent is no person (admitted_by stays empty).
       if (mirrorHumans) await mirrorHumans.apply([row.targetId], actorType === "user" ? { actorUserId: actorId } : {});

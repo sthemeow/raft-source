@@ -32,11 +32,11 @@
  * assistant doorbell, RaftBench) skip all of this: no query, no change.
  * Third-party OAuth rows (client_id set) are never guarded here.
  */
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { currentDate, type AgentMessage } from "@botiverse/raft-shared";
 import { firstPartyAppOfSystemApp, firstPartyApps, systemAppsWithAgentNotices } from "../apps/firstPartyApps";
 import { getDb, type DatabaseExecutor } from "../db/index";
-import { CORE_SYSTEM_APPS, thirdPartyAgentEvents } from "../db/schema";
+import { channelAgents, channels, CHANNEL_MUTE_SYSTEM_APP, CORE_SYSTEM_APPS, thirdPartyAgentEvents } from "../db/schema";
 
 export type SystemAppAgentEvent = typeof thirdPartyAgentEvents.$inferSelect;
 export type SystemApp = NonNullable<SystemAppAgentEvent["systemApp"]>;
@@ -70,8 +70,30 @@ function requiresDeliveryGuard(systemApp: SystemApp): boolean {
   return (requiredSystemAppsOverride ?? systemAppsRequiringDeliveryGuard()).has(systemApp);
 }
 
+async function canReadChannelMuteNotices(events: readonly SystemAppAgentEvent[]): Promise<SystemAppDeliveryGuardVerdicts> {
+  const targets = events.flatMap(event => event.relatedChannelId ? [event.relatedChannelId] : []);
+  if (targets.length === 0) return new Map();
+  const members = await getDb().select({
+    channelId: channels.id,
+    serverId: channels.serverId,
+    agentId: channelAgents.agentId,
+  }).from(channelAgents)
+    .innerJoin(channels, eq(channels.id, channelAgents.channelId))
+    .where(and(
+      inArray(channels.id, targets),
+      inArray(channelAgents.agentId, events.map(event => event.agentId)),
+      inArray(channels.type, ["channel", "private"]),
+      isNull(channels.deletedAt),
+    ));
+  const visible = new Set(members.map(member => `${member.serverId}:${member.channelId}:${member.agentId}`));
+  return new Map(events.map(event => [
+    event.id, visible.has(`${event.serverId}:${event.relatedChannelId}:${event.agentId}`),
+  ]));
+}
+
 /** The guard of a system app: one registered at run time, else its first-party app's `agentNotice.deliverable`. */
 function guardOf(systemApp: SystemApp): SystemAppDeliveryGuard | undefined {
+  if (systemApp === CHANNEL_MUTE_SYSTEM_APP) return canReadChannelMuteNotices;
   const registered = deliveryGuards.get(systemApp);
   if (registered) return registered;
   const deliverable = firstPartyAppOfSystemApp(systemApp)?.agentNotice?.deliverable;

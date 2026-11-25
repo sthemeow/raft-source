@@ -5551,6 +5551,18 @@ export const ALL_CHANNEL_LEAVE_MESSAGE = "Cannot leave or remove from the #all c
 /** Thrown when an agent is removed from (or leaves) #all; routes map it to 403. */
 export const ALL_CHANNEL_REMOVE_MEMBERS_MESSAGE = "Cannot remove members from the #all channel";
 
+export async function applyChannelAgentJoinMute(
+  executor: DatabaseExecutor,
+  channel: Pick<typeof channels.$inferSelect, "id" | "serverId" | "type" | "muteNewAgents">,
+  agentId: string,
+) {
+  if (!channel.muteNewAgents || (channel.type !== "channel" && channel.type !== "private")) return;
+  await setInboxTargetActivityMuteState({
+    receiverType: "agent", receiverId: agentId, serverId: channel.serverId,
+    sourceChannelId: channel.id, activityMuted: true,
+  }, executor);
+}
+
 export async function addAgent(channelId: string, agentId: string, options: ChannelServiceOptions & { role?: "member" | "admin" } = {}): Promise<boolean> {
   if (!options.executor) {
     return withChannelWriterFence(channelId, async (tx) => {
@@ -5564,7 +5576,8 @@ export async function addAgent(channelId: string, agentId: string, options: Chan
   const [channel] = await db
     .select()
     .from(channels)
-    .where(and(eq(channels.id, channelId), isNull(channels.deletedAt)));
+    .where(and(eq(channels.id, channelId), isNull(channels.deletedAt)))
+    .for("no key update");
   if (!channel) {
     throw new Error("Channel not found");
   }
@@ -5602,7 +5615,10 @@ export async function addAgent(channelId: string, agentId: string, options: Chan
     .values({ channelId, agentId, role: options.role ?? "member" })
     .onConflictDoNothing()
     .returning({ agentId: channelAgents.agentId });
-  if (inserted.length > 0) await startReadPositionAtJoin(db, "agent", agentId, channelId);
+  if (inserted.length > 0) {
+    await startReadPositionAtJoin(db, "agent", agentId, channelId);
+    await applyChannelAgentJoinMute(db, channel, agentId);
+  }
   return inserted.length > 0;
 }
 
@@ -5971,7 +5987,7 @@ export async function listChannelsForAgent(serverId: string, agentId: string, op
   // stored announcement id: the serverInfo route adds the resolved
   // `announcement` (channelAnnouncements.ts) while channel_announcement_v0 is on.
   const visibleChannels = listed
-    .map(({ taskId: _taskId, taskNumberHighWater: _taskNumberHighWater, announcementArtifactId: _announcementArtifactId, ...ch }) => {
+    .map(({ taskId: _taskId, taskNumberHighWater: _taskNumberHighWater, announcementArtifactId: _announcementArtifactId, muteNewAgents: _muteNewAgents, ...ch }) => {
       const jointContext = jointContexts.get(ch.id);
       const membership = membershipByChannel.get(ch.id);
       const joined = isEnabledAllChannel(ch) || Boolean(membership);
@@ -6025,7 +6041,7 @@ export async function listChannelsForAgent(serverId: string, agentId: string, op
     getBuiltInConversationChannel(serverId, app.appId, agentId)
   )))
     .filter((channel): channel is NonNullable<typeof channel> => channel !== null)
-    .map(({ taskId: _taskId, taskNumberHighWater: _taskNumberHighWater, announcementArtifactId: _announcementArtifactId, ...channel }) => ({ ...channel, joined: true }));
+    .map(({ taskId: _taskId, taskNumberHighWater: _taskNumberHighWater, announcementArtifactId: _announcementArtifactId, muteNewAgents: _muteNewAgents, ...channel }) => ({ ...channel, joined: true }));
   const visibleWithMuteState = await attachActivityMuteState(visibleChannels, "agent", agentId);
   const builtInDmWithoutMuteSurface = builtInDmChannels.map((channel) => ({
     ...channel,
@@ -8559,7 +8575,7 @@ type ChannelMembershipRole = (typeof channelAgents.$inferSelect)["role"];
  * exist (a public or private channel other than `#all`).
  */
 export function userChannelMembershipRow<Id extends string>(
-  channel: Omit<typeof channels.$inferSelect, "id" | "taskId" | "taskNumberHighWater" | "announcementArtifactId"> & { id: Id; lastPostAt?: string | null },
+  channel: Omit<typeof channels.$inferSelect, "id" | "taskId" | "taskNumberHighWater" | "announcementArtifactId" | "muteNewAgents"> & { id: Id; lastPostAt?: string | null },
   channelRole: ChannelMembershipRole | undefined,
 ) {
   return {
@@ -18385,12 +18401,6 @@ async function latestSeqAcrossOnlineMove(executor: DatabaseExecutor, storageChan
   return Number((result.rows[0] as { seq?: unknown } | undefined)?.seq ?? 0);
 }
 
-async function getLatestMessageSeq(channelId: string): Promise<number> {
-  const db = getDb();
-  const storageChannelId = await getMessageStorageChannelId(channelId);
-  return latestSeqAcrossOnlineMove(db, storageChannelId);
-}
-
 export type InboxTargetActivityMuteState = {
   activityMuted: boolean;
   muteFromSeq: number | null;
@@ -18402,8 +18412,8 @@ export async function getInboxTargetActivityMuteState(
   receiverType: "user" | "agent",
   receiverId: string,
   sourceChannelId: string,
+  db: DatabaseExecutor = getDb(),
 ): Promise<InboxTargetActivityMuteState> {
-  const db = getDb();
   const [state] = await db
     .select({
       activityMuted: inboxTargetMuteStates.activityMuted,
@@ -18437,10 +18447,17 @@ export async function setInboxTargetActivityMuteState(opts: {
   serverId: string;
   sourceChannelId: string;
   activityMuted: boolean;
-}): Promise<InboxTargetActivityMuteState> {
-  const db = getDb();
+}, executor?: DatabaseExecutor): Promise<InboxTargetActivityMuteState> {
+  if (opts.receiverType === "agent" && !executor) {
+    return getDb().transaction(async tx => {
+      await tx.select({ id: channels.id }).from(channels)
+        .where(eq(channels.id, opts.sourceChannelId)).for("no key update");
+      return setInboxTargetActivityMuteState(opts, tx);
+    });
+  }
+  const db = executor ?? getDb();
   const now = currentDate();
-  const current = await getInboxTargetActivityMuteState(opts.receiverType, opts.receiverId, opts.sourceChannelId);
+  const current = await getInboxTargetActivityMuteState(opts.receiverType, opts.receiverId, opts.sourceChannelId, db);
   if (current.activityMuted === opts.activityMuted) {
     return { ...current, changed: false };
   }
@@ -18492,7 +18509,8 @@ export async function setInboxTargetActivityMuteState(opts: {
   // messages would then reach Activity. Only reachable while the route refuses
   // muting assistant DMs (not App bots, ACTIVITY_MUTE_NOT_SUPPORTED); keep the
   // row's start if that changes.
-  const muteFromSeq = await getLatestMessageSeq(opts.sourceChannelId) + 1;
+  const storageChannelId = await getMessageStorageChannelIdWithExecutor(db, opts.sourceChannelId);
+  const muteFromSeq = await latestSeqAcrossOnlineMove(db, storageChannelId) + 1;
   const [state] = await db
     .insert(inboxTargetMuteStates)
     .values({

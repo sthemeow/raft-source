@@ -76,11 +76,12 @@ export function openConversationAgentProfile(
     id: string,
     options: {
       defaultAgentTabIntent: "ordered-first";
+      channelId?: string | null;
       openSource?: "channel" | "thread";
     },
   ) => void,
   agentId: string,
-  options: { openSource?: "channel" | "thread" } = {},
+  options: { openSource?: "channel" | "thread"; channelId?: string | null } = {},
 ): void {
   openProfile("agent", agentId, { defaultAgentTabIntent: "ordered-first", ...options });
 }

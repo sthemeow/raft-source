@@ -2837,7 +2837,8 @@ export type SystemAppKey = `system.${string}`;
  * NOT_ITEM_SYSTEM_APPS (RaftBench is not; the assistant and the onboarding
  * instructions, services/onboardingInboxItems.ts, are).
  */
-export const CORE_SYSTEM_APPS = ["system.assistant", "system.raftbench", "system.feedback", "system.onboarding"] as const satisfies readonly SystemAppKey[];
+export const CHANNEL_MUTE_SYSTEM_APP = "system.channel-mute" satisfies SystemAppKey;
+export const CORE_SYSTEM_APPS = ["system.assistant", "system.raftbench", "system.feedback", "system.onboarding", CHANNEL_MUTE_SYSTEM_APP] as const satisfies readonly SystemAppKey[];
 export const thirdPartyAgentEvents = pgTable("third_party_agent_events", {
   id: uuid("id").primaryKey().$defaultFn(() => randomUUID()),
   serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
@@ -3648,6 +3649,7 @@ export const channels = pgTable("channels", {
   // of the channel reads as none (resolved on read), and deleting or moving
   // it out clears it (platform/channelAnnouncements.ts).
   announcementArtifactId: text("announcement_artifact_id"),
+  muteNewAgents: boolean("mute_new_agents").notNull().default(false),
   parentMessageId: uuid("parent_message_id"),
   // Derived: for a thread, the channel its parent message currently lives in;
   // NULL otherwise. Maintained only by the channels_parent_channel_id_* and

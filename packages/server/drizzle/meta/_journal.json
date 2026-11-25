@@ -5356,6 +5356,13 @@
       "when": 1795157222534,
       "tag": "0764_message_server_timeline_conversation_id",
       "breakpoints": true
+    },
+    {
+      "idx": 765,
+      "version": "7",
+      "when": 1795620145071,
+      "tag": "0765_channel_agent_mute_on_join",
+      "breakpoints": true
     }
   ]
 }

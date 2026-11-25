@@ -431,6 +431,7 @@ export * from "./assistantOtterShortcut";
 export * from "./composerSendKey";
 export * from "./shortcutOverrides";
 export * from "./channelPermissions";
+export * from "./channelAgentDelivery";
 export * from "./channelAnnouncement";
 export * from "./raftPermalinks";
 export * from "./notificationDisplay";

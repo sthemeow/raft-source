@@ -5559,6 +5559,9 @@ registerAgentApiRoute("channelMute", ...agentApiRequestValidators("channelMute")
         action: "channel_mute",
       });
     }
+    if (state.changed && (channel.type === "channel" || channel.type === "private")) {
+      req.app.get("io")?.to(`channel:${channel.id}`).emit("channel:members-updated", { channelId: channel.id });
+    }
     sendAgentApiResponse("channelMute", res, buildAgentChannelMuteResponse(channel, state));
   } catch (err) {
     sendJsonServerError(req, res, {
@@ -5593,6 +5596,9 @@ registerAgentApiRoute("channelUnmute", ...agentApiRequestValidators("channelUnmu
       mute_from_seq: null,
       negative_evidence_bucket: "does_not_prove_future_message_suppression",
     });
+    if (state.changed && (channel.type === "channel" || channel.type === "private")) {
+      req.app.get("io")?.to(`channel:${channel.id}`).emit("channel:members-updated", { channelId: channel.id });
+    }
     sendAgentApiResponse("channelUnmute", res, buildAgentChannelMuteResponse(channel, state));
   } catch (err) {
     sendJsonServerError(req, res, {

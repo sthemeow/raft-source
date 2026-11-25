@@ -71,6 +71,7 @@ import { useChannelFirstPageSettled } from "../../hooks/useChannelFirstPageSettl
 import { useJoinDeferred } from "../../store/joinDeferred";
 import { rosterHumanAsMember } from "../../utils/rosterHumanAsMember";
 import { useChannelMembers } from "../../hooks/useChannelMembers";
+import { useLoadChannelAgentDelivery } from "../../store/channelAgentDelivery";
 import { useCurrentDay } from "../../hooks/useCurrentDay";
 import Tooltip from "../../components/ui/Tooltip";
 import AppBadge from "../../components/agent/AppBadge";
@@ -272,6 +273,7 @@ export function ChatPanel({
   // Members, notification settings, read receipts: after the first page (task #17), and after a join's idle (joinDeferred).
   const channelFirstPageSettled = useChannelFirstPageSettled(channelId);
   const joinDeferred = useJoinDeferred(channelId);
+  useLoadChannelAgentDelivery(channelFirstPageSettled && !joinDeferred ? channelId : null);
   useReadReceiptHydrate(channelFirstPageSettled ? channel : null);
   const messageRenderScope = useContext(ChatPanelMessageRenderScope);
   const messages = useMessageStore((s) => selectChannelMessageBucket(s, channelId));

@@ -6,6 +6,8 @@ import { isAgentInMemberLists, useAgentStore } from "../../store/agentStore";
 import { useStoredChannel } from "../../store/useStoredChannel";
 import { useServerStore } from "../../store/serverStore";
 import { useChannelMembers } from "../../hooks/useChannelMembers";
+import { useChannelAgentDelivery, useLoadChannelAgentDelivery } from "../../store/channelAgentDelivery";
+import { ChannelAgentDeliveryAction } from "../../components/channel/ChannelAgentDeliveryControls";
 import type { ChannelAgent, ChannelExternalMember, ChannelHuman } from "../../hooks/useChannelMembers";
 import { useProfileStore } from "../../store/profileStore";
 import { useServerPermissions } from "../../hooks/useServerPermissions";
@@ -95,6 +97,8 @@ export function ChannelMembers({
   const canOpenHumanProfiles = true;
   const currentUserId = useAuthStore((s) => s.user?.id);
   const serverMembers = useServerStore((s) => s.members);
+  useLoadChannelAgentDelivery(channelId);
+  const { state: delivery } = useChannelAgentDelivery(channelId);
   const localMembers = useChannelMembers(channelId, { enabled: !prefetchedMembers });
   const {
     channelAgents,
@@ -402,6 +406,7 @@ export function ChannelMembers({
      whole row the profile button and adds the server-role tag in the
      trailing slot; the panel keeps the avatar-click affordance. */
   const renderAgentRow = (agent: ChannelAgent, pageMode: boolean) => {
+    const deliveryMember = delivery?.members.find(member => member.agentId === agent.id);
     const canRemoveAgent = agent.canRemoveFromChannel ?? (canRemoveChannelMembers && isLocalMember(agent.serverId));
     const serverLabels = jointServerLabels(agent);
     const origin = jointMemberOrigin(agent, currentChannel);
@@ -412,7 +417,7 @@ export function ChannelMembers({
         return;
       }
       closePanel();
-      openProfile("agent", agent.id);
+      openProfile("agent", agent.id, { channelId });
     };
     const role = agent.effectiveChannelRole ?? agent.serverRole ?? "member";
     const actions = renderMemberActions(
@@ -431,13 +436,19 @@ export function ChannelMembers({
         agentFallbackActivity={agentStatusFallbackActivity(agent.status)}
         name={<MemberRowName name={agent.displayName || agent.name} origin={origin} localTags={<JointServerBadges labels={serverLabels} />} />}
         avatarCorner={<AvatarOriginCorner origin={origin} />}
-        secondary={<AgentActivityInfo agentId={agent.id} fallbackStatus={agent.status} />}
+        secondary={(
+          <span className="flex flex-wrap items-center gap-x-2">
+            <AgentActivityInfo agentId={agent.id} fallbackStatus={agent.status} />
+            {deliveryMember?.muted && <span>{formatMessage({ id: "channel.agentDelivery.mutedStatus" })}</span>}
+          </span>
+        )}
         onAvatarClick={!canOpenAgentProfiles || pageMode ? undefined : openAgentProfile}
         onRowClick={canOpenAgentProfiles && pageMode ? openAgentProfile : undefined}
         trailing={(
           <>
             <AgentRuntimeSignInRowAction agentId={agent.id} fallbackStatus={agent.status} />
             <ChannelMemberRoleAndActions role={role} actions={actions} />
+            <ChannelAgentDeliveryAction channelId={channelId} agentId={agent.id} presentation="icon" />
           </>
         )}
       />

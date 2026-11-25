@@ -1,0 +1,1 @@
+ALTER TABLE "channels" ADD COLUMN "mute_new_agents" boolean DEFAULT false NOT NULL;

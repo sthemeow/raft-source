@@ -68,6 +68,8 @@ import { AppBotFromApp } from "./ManagedAppIdentity";
 import type { RuntimeConfigEditorHandle } from "./AgentProfileInfo";
 import { AgentRecentActivity } from "./AgentRecentActivity";
 import { AgentActionRows } from "./AgentActionRows";
+import { ChannelAgentDeliveryAction } from "../../components/channel/ChannelAgentDeliveryControls";
+import { useChannelAgentDelivery, useLoadChannelAgentDelivery } from "../../store/channelAgentDelivery";
 import { AgentStatusBadge } from "./AgentStatusBadge";
 import { AgentDetailHeader } from "./AgentDetailHeader";
 import { AgentComputerOfflineCard } from "./AgentComputerOfflineCard";
@@ -88,8 +90,9 @@ const EMPTY_ACTIVITY_LOG: ActivityLogEntry[] = [];
 
 const NO_ROLE_OPTIONS: ReturnType<typeof useEditableAgentRoleOptions> = [];
 
-export function AgentDetailPanel({ agent, onClose, onBack, onOpenProfile, activityOnly = false }: {
+export function AgentDetailPanel({ agent, onClose, onBack, onOpenProfile, deliveryChannelId, activityOnly = false }: {
   agent: Agent;
+  deliveryChannelId?: string | null;
   onClose?: () => void;
   onBack?: () => void;
   onOpenProfile?: (type: "agent" | "human", id: string) => void;
@@ -99,6 +102,8 @@ export function AgentDetailPanel({ agent, onClose, onBack, onOpenProfile, activi
   activityOnly?: boolean;
 }) {
   const { formatMessage } = useIntl();
+  useLoadChannelAgentDelivery(deliveryChannelId);
+  const { state: channelDelivery } = useChannelAgentDelivery(deliveryChannelId);
   const formatMessageRef = useRef(formatMessage);
   formatMessageRef.current = formatMessage;
   const stopAgent = useAgentStore((s) => s.stopAgent);
@@ -896,6 +901,15 @@ export function AgentDetailPanel({ agent, onClose, onBack, onOpenProfile, activi
 
           {agent.deletedAt && canViewPrivateAgentSurfaces && (
             <AgentArchiveSection agent={agent} canManage={canArchiveAgent} />
+          )}
+
+          {deliveryChannelId && channelDelivery?.canManage && channelDelivery.members.some(member => member.agentId === agent.id) && (
+            <>
+              <Separator />
+              <div className="px-(--surface-inset) py-4">
+                <ChannelAgentDeliveryAction channelId={deliveryChannelId} agentId={agent.id} presentation="profile" />
+              </div>
+            </>
           )}
 
           {/* Actions: runtime operations (diagnostics copy, issue report,

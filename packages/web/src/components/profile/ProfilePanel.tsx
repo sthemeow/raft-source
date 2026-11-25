@@ -394,6 +394,7 @@ export default function ConnectedProfilePanel({
         )}
         <AgentDetailPanel
           agent={resolvedAgent}
+          deliveryChannelId={profileChannelId}
           onBack={onBack}
           onClose={closePanel}
           onOpenProfile={onOpenProfile}

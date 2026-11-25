@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { deliverSystemAppAgentEvent } from "../services/systemAppAgentEvents";
+import { getChannelAgentDelivery, updateChannelAgentDelivery } from "../services/channelAgentDeliveryService";
 import { AGENT_LOUNGE_OUTSIDER_ADD_REFUSAL, AgentLoungeImmutableError, filterLoungeOutsiderAgents, getLoungeAgentIds, isLoungeOutsiderAgent } from "../services/agentLoungeService";
 import { projectRuntimeErrorActivityDetail } from "../services/agentRuntimeErrorVisibility";
 import { createChannelCapabilityFor, isRuntimeErrorDetailActivity } from "@botiverse/raft-shared";
@@ -3471,6 +3474,55 @@ async function resolveMessageDisplayPrefsTarget(req: Request, res: Response) {
   }
   return channel;
 }
+
+const deliveryChangeFields = { enabled: z.boolean() };
+const agentDeliveryChange = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("channel"), ...deliveryChangeFields }).strict(),
+  z.object({
+    kind: z.literal("individual"),
+    agentId: z.string().uuid(),
+    individualPrefsVersion: z.number().int().nonnegative(),
+    ...deliveryChangeFields,
+  }).strict(),
+]);
+
+channelRouter.get("/:id/agent-delivery", async (req, res) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) {
+    return refuse(res, 404, { error: "Channel not found", code: "channel_not_found" });
+  }
+  const state = await getChannelAgentDelivery({ channelId: req.params.id, serverId: req.serverId!, userId: req.userId! });
+  res.json(state);
+});
+
+channelRouter.patch("/:id/agent-delivery", async (req, res) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) {
+    return refuse(res, 404, { error: "Channel not found", code: "channel_not_found" });
+  }
+  const change = agentDeliveryChange.safeParse(req.body);
+  if (!change.success) {
+    return refuse(res, 400, { error: "Invalid Agent delivery setting", code: "invalid_channel_agent_delivery" });
+  }
+  const { state, changed, notices } = await updateChannelAgentDelivery({
+    channelId: req.params.id,
+    serverId: req.serverId!,
+    userId: req.userId!,
+  }, change.data);
+  if (changed) {
+    const io = req.app.get("io") as SocketServer | undefined;
+    io?.to(`channel:${req.params.id}`).emit("channel:members-updated", { channelId: req.params.id });
+  }
+  const orchestrator = req.app.get("agentOrchestrator") as AgentOrchestrator | undefined;
+  if (orchestrator) {
+    await Promise.all(notices.map(async event => {
+      try {
+        await deliverSystemAppAgentEvent({ event, deliverer: orchestrator });
+      } catch (error) {
+        console.warn("Failed to deliver Agent unmute notice:", serializeErrorForLog(error));
+      }
+    }));
+  }
+  res.json(state);
+});
 
 channelRouter.get("/:id/notification-settings", async (req, res) => {
   try {

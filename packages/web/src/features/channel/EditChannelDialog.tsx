@@ -24,6 +24,8 @@ import { useAuthStore } from "../../store/authStore";
 import { ChannelPreferencesSection } from "../../components/channel/ChannelPreferencesSection";
 import { ChannelAnnouncementField } from "../../components/channel/ChannelAnnouncementField";
 import { ChannelVisitorVisibleField } from "../../components/channel/ChannelVisitorVisibleField";
+import { ChannelAgentDeliverySettings } from "../../components/channel/ChannelAgentDeliveryControls";
+import { useChannelAgentDelivery, useLoadChannelAgentDelivery } from "../../store/channelAgentDelivery";
 import {
   EXTERNAL_CHANNELS_FEATURE_FLAG_KEY,
   MAX_JOINT_CHANNEL_SERVERS,
@@ -168,6 +170,8 @@ export function EditChannelDialog({
   const isArchived = !!channel?.archivedAt;
   const { capabilities } = useServerPermissions();
   const effectiveCapabilities = channel?.channelCapabilities ?? capabilities;
+  useLoadChannelAgentDelivery(effectiveCapabilities.editChannelMetadata ? channelId : null);
+  const { state: agentDelivery } = useChannelAgentDelivery(channelId);
   const nav = useAppNavigate();
   // A conversion to an external channel under way (the conversation's
   // ChannelConversionStrip follows it and owns Retry and Cancel). The durable
@@ -1028,6 +1032,7 @@ export function EditChannelDialog({
       <ChannelVisitorVisibleField key={`visitors-${channelId}`} channelId={channelId} visitorVisible={visitorVisible} canTurnOn={visitorVisibleCanTurnOn} disabled={saving} />
     ),
     showSlack && <ChannelSlackBridgeRow key="slack" editor={bridgeEditor} channelId={channelId} channelName={initialName} disabled={saving} />,
+    agentDelivery?.canManage && <ChannelAgentDeliverySettings key="agent-delivery" channelId={channelId} />,
   ].filter(Boolean);
   const channelSettingsSection = channelSettingsRows.length > 0 && (
     <section className="stack-y-3" data-testid="channel-settings-manage-group" aria-labelledby="channel-settings-manage-heading">
