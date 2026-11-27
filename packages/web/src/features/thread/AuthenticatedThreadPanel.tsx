@@ -11,6 +11,9 @@ import { useChannelStore } from "../../store/channelStore";
 import type { Channel } from "../../store/channelStore";
 import { useLoungeAgentName } from "../../components/agent/agentLounge";
 import { useMessageStore } from "../../store/messageStore";
+import { useServerFeatureFlag } from "../../store/serverFeatureFlags";
+import { SEND_HOLD_FEATURE_FLAG_KEY } from "@botiverse/raft-shared";
+import { useHeldPreviewHydration } from "../../store/heldPreviews";
 import { coerceWireMessageSeqs } from "../../store/wireMessageSeq";
 import type { Message } from "../../store/messageStore";
 import { useServerStore } from "../../store/serverStore";
@@ -207,6 +210,9 @@ export function AuthenticatedThreadPanel({
     else clearFocusedMessage();
     onFocusedMessageConsumed?.();
   }, [clearFocusedMessage, clearOutlineFocus, clearTaskModalFocusedMessage, isTaskModalSurface, onFocusedMessageConsumed]);
+  // Send hold: sends still waiting in this thread, after a reload or reconnect.
+  const sendHoldEnabled = useServerFeatureFlag(SEND_HOLD_FEATURE_FLAG_KEY).enabled;
+  useHeldPreviewHydration(threadChannelId, sendHoldEnabled);
   const threadBucket = useMessageStore((s) =>
     threadChannelId ? (s.channelMessages[threadChannelId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES
   );

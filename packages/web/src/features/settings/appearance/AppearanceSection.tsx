@@ -17,6 +17,7 @@ import { AppearanceThemeSettingsControl } from "../../../components/settings/App
 import { ServerThemeLink } from "./ServerThemeLink";
 import { AssistantOtterSettingsSection } from "../../../assistant/AssistantOtterSettings";
 import { ComposerSendKeySetting } from "./ComposerSendKeySetting";
+import { SendHoldSetting } from "./SendHoldSetting";
 
 const APPEARANCE_PREVIEW_AGENT: Agent = {
   id: "appearance-preview-agent",
@@ -214,6 +215,7 @@ export function AppearanceSection({ publicSurface = false }: { publicSurface?: b
           {formatMessage({ id: "settings.appearance.savedOnDevice" })}
         </p>
       </div>
+        <SendHoldSetting />
         <ComposerSendKeySetting />
         <AssistantOtterSettingsSection />
         </>

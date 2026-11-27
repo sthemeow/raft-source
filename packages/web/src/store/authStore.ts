@@ -2,7 +2,7 @@ import { assertAccountLinkCompleted } from "../utils/pendingAccountLink";
 import { afterFirstScreen } from "../boot/deferredUi";
 import { markBootMilestone, markBootTokenRefreshedFirst } from "../boot/bootTiming";
 import type { PendingAccountLink } from "../utils/pendingAccountLink";
-import type { DescriptionLinkWarning, StoredComposerSendKey, StoredShortcutOverrides } from "@botiverse/raft-shared";
+import type { DescriptionLinkWarning, StoredComposerSendKey, StoredSendHoldSeconds, StoredShortcutOverrides } from "@botiverse/raft-shared";
 import { create } from "zustand";
 import { clearSignupCampaign, signupCampaignBody } from "../analytics/signupCampaign";
 import { landingBody } from "../utils/verificationLandingBody";
@@ -98,6 +98,8 @@ export interface User {
   railTabOrder?: string[] | null;
   /** How the message box sends (#triage:#210); null/absent = Enter (features/composer/composerSendKey.ts). */
   composerSendKey?: StoredComposerSendKey;
+  /** How long a sent message waits before delivery; null/absent = the default, 0 = off (shared sendHold.ts). */
+  sendHoldSeconds?: StoredSendHoldSeconds;
   shortcutOverrides?: StoredShortcutOverrides | null; // changed keyboard shortcuts (#proj-frontend:#37); null = all defaults
   assistantOtterShortcut?: string | null; // the otter's Settings-era shortcut, read until the shortcuts panel saves one
   /** RFC-067 "Share usage data"; null = not chosen (SHARE_USAGE_DATA_DEFAULT applies). */

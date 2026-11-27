@@ -153,7 +153,7 @@ test("a row's keys are KbdShortcut key names, a cap each; the keys are KeyboardE
   assert.deepEqual(keysOf("resize-big-steps"), [[["shift", "ArrowLeft"], ["shift", "ArrowRight"]], [["shift", "ArrowUp"], ["shift", "ArrowDown"]]]);
   for (const row of rows) {
     for (const combo of row.keys.flatMap(combosOf)) {
-      assert.ok(combo.key.length === 1 || /^(Enter|Arrow(Up|Down|Left|Right)|F\d{1,2})$/.test(combo.key), `${row.id}: ${combo.key} is not a key name KbdShortcut and the browser share`);
+      assert.ok(combo.key.length === 1 || /^(Enter|Backspace|Arrow(Up|Down|Left|Right)|F\d{1,2})$/.test(combo.key), `${row.id}: ${combo.key} is not a key name KbdShortcut and the browser share`);
     }
   }
 });
@@ -184,9 +184,9 @@ test("the web hides the desktop app's rows (workspaces, ⌘W); ⌘↑ / ⌘↓ i
   assert.equal(ids(webWindows).includes("jump-ends"), false);
   assert.equal(ids(webMac).includes("close-preview"), false, "⌘W closes the browser tab on the web (Artea: desktop app only)");
   assert.equal(ids(desktopWindows).includes("close-preview"), true);
-  assert.equal(ids(webMac).length, 21, "21 rows on the web on a Mac, without an assistant");
-  assert.equal(ids(webWindows).length, 20, "and 20 on Windows / Linux");
-  assert.equal(ids(visibleShortcutGroups({ apple: true, desktopApp: false, assistantOtter: { mod: true, shift: true, key: "." } })).length, 22, "22 with the otter's row");
+  assert.equal(ids(webMac).length, 23, "23 rows on the web on a Mac, without an assistant");
+  assert.equal(ids(webWindows).length, 22, "and 22 on Windows / Linux");
+  assert.equal(ids(visibleShortcutGroups({ apple: true, desktopApp: false, assistantOtter: { mod: true, shift: true, key: "." } })).length, 24, "24 with the otter's row");
   assert.deepEqual(desktopWindows.at(-1)?.rows.map((row) => row.id), ["switch-workspace", "step-workspace"]);
 });
 

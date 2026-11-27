@@ -181,6 +181,7 @@ export interface Message {
    * arrive.
    */
   optimisticDisplaySeq?: number;
+  held?: { createdAt: string; releaseAt: string }; // send hold, client-only: waiting until releaseAt (store/heldPreviews.ts)
   channelId: string;
   conversationContext?: ConversationContext;
   randomId?: string | null;
@@ -457,6 +458,7 @@ export interface MessageState {
     optimisticId?: string,
     randomId?: string,
     mentions?: MessageMention[],
+    options?: { hold?: boolean },
   ) => Promise<SendMessageResult>;
   loadMessageContext: (channelId: string, messageId: string) => Promise<void>;
   // Silent variant for resuming a remembered scroll position. Loads the same
@@ -2515,7 +2517,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
     return addedCount;
   },
 
-  sendMessage: async (channelId, content, attachmentIds, asTask, optimisticId, randomId, mentions) => {
+  sendMessage: async (channelId, content, attachmentIds, asTask, optimisticId, randomId, mentions, options) => {
     const ingressContext = captureReceiverPrivateIngressContext(get().currentUserId);
     // The reply raises lastSeq to the sent message's seq: a starting sync
     // horizon that arrives after this write is not safe to use either.
@@ -2529,6 +2531,7 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       mentions: mentions && mentions.length > 0 ? mentions : undefined,
       // The sender's IANA zone, recorded on the message for agents only.
       timezone: detectBrowserTimezone() ?? undefined,
+      ...(options?.hold ? { hold: true } : {}), // send hold: the server decides, and answers once delivered
     });
     const normalizedResponse = normalizeSendMessageResponse(data);
     const message = coerceCurrentReceiverPrivateMessage(

@@ -13,7 +13,7 @@ import { DISPLAY_LOCALES } from "@botiverse/raft-shared/src/displayLocales";
 import type { DisplayLocale } from "@botiverse/raft-shared/src/displayLocales";
 import type { AgentCallApprovalDecidedBy, AgentContextViewGrantId, AgentVoiceCallId, ChannelSideLayout, ReadinessFact, ServerRole, StoredShortcutOverrides } from "@botiverse/raft-shared";
 import type { ActivityTurnSummary, AnnouncementAudience, AnnouncementAudienceSnapshot, AnnouncementContent, MentionDeliveryTerminalDecision } from "@botiverse/raft-shared";
-import type { DataExportScope, JsonValue } from "@botiverse/raft-shared";
+import type { DataExportScope, JsonValue, StoredSendHoldSeconds } from "@botiverse/raft-shared";
 import { pgTable, pgSequence, text, timestamp, integer, bigint, bigserial, uuid, primaryKey, unique, uniqueIndex, index, json, jsonb, boolean, customType, check, date, foreignKey, smallint, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -89,6 +89,9 @@ export const users = pgTable("users", {
   // How the message box sends (#triage:#210; shared composerSendKey.ts):
   // null = the default (Enter sends), "mod_enter" = ⌘/Ctrl+Enter sends.
   composerSendKey: text("composer_send_key", { enum: ["mod_enter"] }),
+  // How long a sent message waits before delivery, withdrawable meanwhile
+  // (shared sendHold.ts): null = the default, 0 = off.
+  sendHoldSeconds: smallint("send_hold_seconds").$type<NonNullable<StoredSendHoldSeconds>>(),
   // The keyboard shortcuts the person changed (#proj-frontend:#37; shared shortcutOverrides.ts): command id → its
   // shortcuts, written with mod (⌘ on Apple platforms, Ctrl elsewhere); only changed commands; null = all defaults.
   shortcutOverrides: json("shortcut_overrides").$type<StoredShortcutOverrides>(),
@@ -10557,6 +10560,31 @@ export const attestedSendPendingDrafts = pgTable("attested_send_pending_drafts",
 }, (t) => [
   uniqueIndex("idx_attested_send_pending_drafts_agent_channel").on(t.agentId, t.channelId),
   index("idx_attested_send_pending_drafts_expires_at").on(t.expiresAt),
+]);
+
+/**
+ * Send hold (shared sendHold.ts): a person's message waiting to
+ * be delivered. It is not a message yet (no seq, no reads, no notices, no
+ * agent sees it); release hands `payload` to broadcastAndDeliver with the same
+ * random_id and deletes the row, withdraw deletes it. At most one per sender
+ * and conversation. `releasing` marks a row whose release has begun, so a
+ * withdraw can no longer take it and a crashed release is retried (the
+ * random_id makes the retry idempotent).
+ */
+export const pendingHumanSends = pgTable("pending_human_sends", {
+  id: uuid("id").primaryKey().$defaultFn(() => randomUUID()),
+  serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+  channelId: uuid("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  senderUserId: uuid("sender_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  randomId: text("random_id").notNull(),
+  payload: jsonb("payload").notNull(),
+  releasing: boolean("releasing").notNull().default(false),
+  releaseAt: timestamp("release_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("idx_pending_human_sends_sender_channel").on(t.senderUserId, t.channelId),
+  uniqueIndex("idx_pending_human_sends_sender_random").on(t.senderUserId, t.randomId),
+  index("idx_pending_human_sends_release_at").on(t.releaseAt),
 ]);
 
 export const attestedSendDraftOutcomes = pgTable("attested_send_draft_outcomes", {

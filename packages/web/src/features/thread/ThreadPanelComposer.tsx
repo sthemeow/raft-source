@@ -193,6 +193,7 @@ export function ThreadPanelComposer({
           asTaskShortcutDisabled={taskV2}
           resolveChannelId={threadChannelId ? undefined : ensureSurfaceThreadChannel}
           onChannelResolved={threadChannelId ? undefined : handleThreadChannelResolved}
+          skipSendHold={!threadChannelId}
           migrateDraftFromChannelId={threadChannelId ? `pending-thread:${conversationKey}` : undefined}
           mentionChannelId={threadMentionChannelId}
           isChannelThread={isChannelThreadInput}

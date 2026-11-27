@@ -18,7 +18,7 @@ import type { MessageTimelineHandle, MessageTimelineSource } from "../../compone
 import { createTimelinePageGuard } from "../../components/message/timelinePageGuard";
 import { useReadReceiptHydrate } from "../../hooks/useReadReceiptHydrate";
 import { takeInFlightThreadRepliesPrefetch, takeThreadRepliesPrefetch, threadInitialFocusId, threadRepliesRequest } from "../../store/threadRepliesPrefetch";
-import { THREAD_LATEST_WINDOW_LIMIT, mergeThreadBucketWithinWindow, mergeThreadMessageUpdates, mergeThreadMessages, onlyThreadMessages, sortThreadMessages } from "./threadMessages";
+import { THREAD_LATEST_WINDOW_LIMIT, dropOptimisticRowsGoneFromBucket, mergeThreadBucketWithinWindow, mergeThreadMessageUpdates, mergeThreadMessages, onlyThreadMessages, sortThreadMessages } from "./threadMessages";
 import { createThreadLiveReadBatcher, subscribeThreadLiveReplies } from "./threadLiveReplies";
 import { useOpenThreadReadAgain } from "./useOpenThreadReadAgain";
 import { scrollThreadTimelineToTop } from "./threadPanelDom";
@@ -441,14 +441,18 @@ export function useThreadTimeline({
   useEffect(() => subscribeAndLoadThreadEvent(), [threadChannelId, repliesRetryAt]);
 
   useEffect(() => {
-    if (!threadChannelId || threadBucket.length === 0) return;
+    if (!threadChannelId) return;
     setMessages((prev) => {
       const filteredThreadBucket = onlyThreadMessages(
         threadChannelId,
         coerceThreadIngress(threadBucket),
       );
+      // Send hold: a withdrawn send leaves the store, so its
+      // row (the sender's, or a held preview) leaves this list too.
+      const kept = dropOptimisticRowsGoneFromBucket(prev, filteredThreadBucket);
+      if (filteredThreadBucket.length === 0) return kept;
       return mergeThreadBucketWithinWindow(
-        prev,
+        kept,
         filteredThreadBucket,
         hasNewerRef.current,
       );

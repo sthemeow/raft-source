@@ -1,3 +1,4 @@
+import { SEND_HOLD_WITHDRAWN_CODE } from "@botiverse/raft-shared";
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import type { ChangeEvent } from "react";
 import { useIntl } from "react-intl";
@@ -66,6 +67,9 @@ import { formatComposerUploadError } from "../../utils/attachmentUploadErrorPres
 import { postLegacyAttachment } from "../../utils/legacyAttachmentUpload";
 import { SELECTED_TEXT_QUOTE_EVENT, appendQuoteToComposer } from "../../components/message/selectedTextQuote";
 import type { SelectedTextQuoteDetail } from "../../components/message/selectedTextQuote";
+import { HELD_SEND_RESTORE_EVENT, latestOwnHeldSend, restoreWithdrawnHeldSend, sendHeldNow, withdrawHeldSend } from "./sendHold";
+import { HELD_PREVIEW_ID_PREFIX } from "../../store/heldPreviews";
+import type { HeldSendRestoreDetail } from "./sendHold";
 import { QUOTE_REPLY_FEATURE_FLAG_KEY, useServerFeatureFlag } from "../../store/serverFeatureFlags";
 import { buildInlineQuoteSendArtifacts, buildPendingQuoteFromEvent, clearPendingComposerQuote, getPendingComposerQuote, setPendingComposerQuote, usePendingComposerQuote } from "./composerQuoteStore";
 import { ComposerQuoteBar } from "./ComposerQuoteBar";
@@ -119,6 +123,7 @@ export function MessageInput({
   onWillSend,
   resolveChannelId,
   onChannelResolved,
+  skipSendHold = false,
   mentionChannelId,
   mentionScopeChannelType,
   loadMentionMembers = true,
@@ -158,6 +163,14 @@ export function MessageInput({
   resolveChannelId?: () => Promise<string>;
   /** Called only after a message has been durably accepted. */
   onChannelResolved?: (channelId: string) => void;
+  /**
+   * Send hold: send at once, without the withdraw window. Set
+   * by the thread panel for the first message of a conversation that does not
+   * exist yet (a new thread, a task without its conversation): it is created
+   * before the send, so a withdrawn first message would leave it empty, and the
+   * panel only binds to it once the send is accepted.
+   */
+  skipSendHold?: boolean;
   /** Channel ID to use for @mention autocomplete (defaults to channelId). Use parent channel ID in threads. */
   mentionChannelId?: string;
   /** Channel type for mention autocomplete when the scoped channel is not present in the local channel store. */
@@ -964,6 +977,27 @@ export function MessageInput({
     return () => window.removeEventListener(SELECTED_TEXT_QUOTE_EVENT, handler);
   }, [channelId, autoResize, formatMessage, onSendOverride, quoteReplyEnabled]);
 
+  // Send hold: a send withdrawn from a reloaded page comes
+  // back here, after whatever is already in the box.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<HeldSendRestoreDetail>).detail;
+      if (!detail || detail.channelId !== channelId || !detail.content) return;
+      setContent((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")}\n${detail.content}` : detail.content));
+      setTimeout(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus({ preventScroll: true });
+          const end = el.value.length;
+          el.setSelectionRange(end, end);
+        }
+        autoResize();
+      }, 0);
+    };
+    window.addEventListener(HELD_SEND_RESTORE_EVENT, handler);
+    return () => window.removeEventListener(HELD_SEND_RESTORE_EVENT, handler);
+  }, [channelId, autoResize]);
+
   // Stryker disable all: focused behavior tests cover sender-name insertion, channel guard, cursor placement, title, and mention dedupe; remaining mutants here are React callback/timer mechanics or jsdom-defensive branches.
   const handleSenderMentionInsert = useCallback((event: Event) => {
     const detail = getSenderMentionInsertDetail(event);
@@ -1650,6 +1684,8 @@ export function MessageInput({
     // Taken before any await: a tap on Send set it just before this submit.
     const sentByTouch = touchSendRef.current;
     touchSendRef.current = false;
+    // Send hold is fixed here, before the thread is resolved and files upload.
+    const holdThisSend = !skipSendHold;
     e.preventDefault();
     if (submitDisabled || submitBusy || readChannelConversionBlocked(membershipChannelId)) return;
     // Send what the box shows. Text written into it without an input event
@@ -1882,7 +1918,7 @@ export function MessageInput({
       // Send message with already-uploaded attachment ids — server response
       // arrives via socket, which auto-replaces the optimistic message.
       // Stryker disable next-line MethodExpression: the preceding missing-id guard makes the defensive filter equivalent for UI submits; behavior tests pin the forwarded ids.
-      const sendResult = await sendMessage(deliveryChannelId, messageContent, attachmentIds.filter((id): id is string => Boolean(id)), submitAsTask || undefined, optimisticId, optimisticDraft.randomId, hasContent ? mentionsToSend : undefined);
+      const sendResult = await sendMessage(deliveryChannelId, messageContent, attachmentIds.filter((id): id is string => Boolean(id)), submitAsTask || undefined, optimisticId, optimisticDraft.randomId, hasContent ? mentionsToSend : undefined, { hold: holdThisSend });
       onChannelResolved?.(deliveryChannelId);
       sentReference?.onSent();
       setPendingMentionActions(sendResult.pendingMentionActions);
@@ -1938,6 +1974,9 @@ export function MessageInput({
           restoredFiles,
         );
       }
+      // Send hold: the sender withdrew it; the text and files
+      // are back in the box (above), and that is all: no error.
+      if (response?.code === SEND_HOLD_WITHDRAWN_CODE) return;
       const errorMessage = response?.code === "peer_not_member"
         ? formatMessage({ id: "message.composer.peerNotMember" })
         : isDeadAttachmentSendError(response)
@@ -1954,7 +1993,7 @@ export function MessageInput({
     clearDraft, dismissMentionPopover, dismissChannelPopover,
     cancelScheduledAutoResize, onWillSend, addOptimisticMessage, currentUser,
     conversionBlockedMessage, sendMessage, onChannelResolved, setAlsoCreateTask,
-    removeOptimisticMessage, quoteReplyEnabled,
+    removeOptimisticMessage, quoteReplyEnabled, skipSendHold,
   ]);
 
   const clearPendingMentionActionRemovalTimers = useCallback((resolutionId?: string) => {
@@ -2193,6 +2232,44 @@ export function MessageInput({
       if (item) doInsertChannel(item);
     })) return;
 
+    // Send hold: in an empty box (no text, no files) with
+    // your own message still waiting here, the send key sends it now and the
+    // matching Backspace withdraws it. Anything in the box: the keys do what
+    // they did.
+    // The keys follow the send key: Enter / Backspace, or with
+    // ⌘/Ctrl+Enter sending, ⌘/Ctrl+Enter / ⌘/Ctrl+Backspace. A held-down
+    // Backspace (repeat) never withdraws.
+    const modHeld = e.metaKey || e.ctrlKey;
+    const sendKeyMod = sendKey === "mod_enter";
+    const plainOrMod = !e.shiftKey && !e.altKey && modHeld === sendKeyMod;
+    // Exactly the keys that send here (a phone's Enter is a new line, so not that).
+    // Held-down keys (repeat) never act: Enter still down from the send that started the wait is not Send now.
+    const sendNowKey = e.key === "Enter" && !e.altKey && !e.repeat && composerEnterAction(e, sendKey) === "send";
+    const withdrawKey = plainOrMod && e.key === "Backspace" && !e.repeat;
+    // Truly empty: a new line or a space is something being typed (Backspace deletes it).
+    const boxEmpty = contentRef.current.length === 0 && (textareaRef.current?.value ?? "").length === 0;
+    if ((sendNowKey || withdrawKey) && boxEmpty && pendingFilesRef.current.length === 0) {
+      const conversationId = !resolveChannelId
+        ? channelId
+        : resolvedChannelIdRef.current?.composerChannelId === channelId ? resolvedChannelIdRef.current.deliveryChannelId : null;
+      const waiting = conversationId && currentUser?.id
+        ? latestOwnHeldSend(useMessageStore.getState().channelMessages[conversationId] ?? [], currentUser.id)
+        : null;
+      if (waiting?.randomId && sendNowKey) {
+        e.preventDefault();
+        void sendHeldNow(waiting.randomId).catch(() => {});
+        return;
+      }
+      if (waiting?.randomId) {
+        e.preventDefault();
+        const restore = waiting.id.startsWith(HELD_PREVIEW_ID_PREFIX) ? { channelId: waiting.channelId, content: waiting.content } : null;
+        void withdrawHeldSend(waiting.randomId).then((withdrawn) => {
+          if (withdrawn && restore) restoreWithdrawnHeldSend(restore);
+        }, () => {});
+        return;
+      }
+    }
+
     // What Enter does is the account's choice (composerSendKey.ts, #triage:#210):
     // Cmd/Ctrl+Shift+Enter sends as a task (cindyz #proj-uiux:306ce5ff; Task v2
     // keeps it where the As task checkbox is); touch-primary portrait keeps plain
@@ -2211,7 +2288,7 @@ export function MessageInput({
       e.preventDefault();
       handleSubmit(e, action === "sendAsTask" ? { forceAsTask: true } : undefined);
     }
-  }, [handleMentionKeyDown, handleChannelKeyDown, filteredChannels, channel.index, doInsertMention, doInsertChannel, handleSubmit, asTaskShortcutDisabled, sendKey]);
+  }, [handleMentionKeyDown, handleChannelKeyDown, filteredChannels, channel.index, doInsertMention, doInsertChannel, handleSubmit, asTaskShortcutDisabled, sendKey, resolveChannelId, channelId, currentUser?.id]);
 
 
   const toggleTaskModeWithoutBlur = useCallback((e: React.MouseEvent<HTMLElement>) => {

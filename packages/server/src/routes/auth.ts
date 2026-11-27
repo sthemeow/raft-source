@@ -72,10 +72,12 @@ import {
   normalizeRailTabOrder,
   parseAssistantOtterShortcutPreference,
   parseComposerSendKeyPreference,
+  parseSendHoldSecondsPreference,
   parseShortcutOverridesPreference,
   validateName,
   type RailTabId,
   type StoredComposerSendKey,
+  type StoredSendHoldSeconds,
   type StoredShortcutOverrides,
   type TimeFormatPreference,
 } from "@botiverse/raft-shared";
@@ -2077,6 +2079,7 @@ authRouter.patch("/me", requireAuth, async (req, res) => {
       assistantOtterVisible?: boolean;
       assistantOtterShortcut?: string | null;
       composerSendKey?: StoredComposerSendKey;
+      sendHoldSeconds?: StoredSendHoldSeconds;
       shortcutOverrides?: StoredShortcutOverrides | null;
       shareUsageData?: boolean | null;
       referralSource?: string | null;
@@ -2136,6 +2139,8 @@ authRouter.patch("/me", requireAuth, async (req, res) => {
       if (assistantOtterShortcut !== undefined) profileFields.assistantOtterShortcut = assistantOtterShortcut;
       const composerSendKey = parseComposerSendKeyPreference(req.body?.composerSendKey);
       if (composerSendKey !== undefined) profileFields.composerSendKey = composerSendKey;
+      const sendHoldSeconds = parseSendHoldSecondsPreference(req.body?.sendHoldSeconds);
+      if (sendHoldSeconds !== undefined) profileFields.sendHoldSeconds = sendHoldSeconds;
       const shortcutOverrides = parseShortcutOverridesPreference(req.body?.shortcutOverrides);
       if (shortcutOverrides !== undefined) profileFields.shortcutOverrides = shortcutOverrides;
       const shareUsageData = parseShareUsageData(req.body?.shareUsageData);

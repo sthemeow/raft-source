@@ -1,4 +1,5 @@
 import { jointDepartureRegistry, configureJointDepartureEffects } from "./services/jointMembershipDeparture";
+import { startSendHold } from "./services/sendHoldService";
 import { jointMembershipDepartureEffects } from "./services/jointMembershipDepartureEffects";
 import { configureJointHostSideArchiveEffects, jointHostSideArchiveRegistry } from "./services/jointHostSideArchive";
 import { serverAdminNoticeRegistry } from "./services/serverAdminNoticeService";
@@ -827,6 +828,8 @@ async function bootstrap() {
   const seatRequestExpiryWorker = startSeatRequestExpiryWorker(io, agentOrchestrator);
   // Question cards past their expiresAt end as expired, and each agent is told (question-card spec §4.4).
   const questionCardExpiryWorker = startQuestionCardExpiryWorker(io, agentOrchestrator);
+  // Send hold: release waiting messages a restart or another instance left behind.
+  const sendHold = startSendHold(io, agentOrchestrator);
   const computerOutageNotificationWorker = startComputerOutageNotificationWorker();
   const agentMigrationReceiptOutboxWorker = startAgentMigrationReceiptOutboxWorker({
     io,
@@ -940,6 +943,7 @@ async function bootstrap() {
     reminderArmWatchdog.stop();
     seatRequestExpiryWorker.stop();
     questionCardExpiryWorker.stop();
+    sendHold.stop();
     agentRuntimeApprovalWorker.stop();
     reminderAppMigrationWorker.stop();
     // Stops the timers now; shutdown waits (bounded) for a maintenance pass in flight.

@@ -7,6 +7,7 @@
  */
 export const API_ROUTE_WORDS: ReadonlySet<string> = new Set([
   "accept", "accept-as-guest", "accept-invite", "access", "account", "account-deletion", "ack",
+  "held", "send-now", "withdraw", // send hold
   "actions", "active", "activity-log", "activity-summaries", "actors", "agent", "agent-dms",
   "agent-migrations", "agent-runtime-providers", "agents", "agreement", "all", "announcement",
   "announcements", "appearance-settings", "app-link-previews", "app-login", "app-logins",

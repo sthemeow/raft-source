@@ -58,7 +58,9 @@ export function sameMessageList(a: Message[], b: Message[]): boolean {
       left.deletedAt !== right.deletedAt ||
       left.actionMetadata !== right.actionMetadata ||
       left.commentRef !== right.commentRef ||
-      left.taskCurrentProjection !== right.taskCurrentProjection
+      left.taskCurrentProjection !== right.taskCurrentProjection ||
+      // Send hold: a sending row turning held shows the Withdraw ring.
+      left.held !== right.held
     ) {
       return false;
     }
@@ -197,6 +199,18 @@ export function mergeThreadBucketWithinWindow(
     return !hasNewer || message.seq <= maxSeq + 1;
   });
   return mergeThreadMessages(existing, withinWindow);
+}
+
+/**
+ * The open thread's optimistic rows come only from the store's bucket; one the
+ * bucket no longer has (a withdrawn held send, a failed send taken back into
+ * the box) is dropped. Persisted rows are never dropped here.
+ */
+export function dropOptimisticRowsGoneFromBucket(existing: Message[], bucket: Message[]): Message[] {
+  const inBucket = new Set(bucket.map((message) => message.id));
+  const kept = existing.filter((message) =>
+    typeof message.seq === "number" || !message.id.startsWith("optimistic-") || inBucket.has(message.id));
+  return kept.length === existing.length ? existing : kept;
 }
 
 export function onlyThreadMessages(threadChannelId: string, messages: Message[]): Message[] {

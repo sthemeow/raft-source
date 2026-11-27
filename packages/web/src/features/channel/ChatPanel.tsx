@@ -131,6 +131,8 @@ import { isTaskV2Task } from "../../utils/taskConversation";
 import ChannelFilesCard from "../../components/message/ChannelFilesCard";
 import { ChannelFilesPanel } from "../../components/message/DeferredChannelFilesPanel";
 import { TASK_V2_CONVERSATIONS_FLAG_KEY, useServerFeatureFlag } from "../../store/serverFeatureFlags";
+import { SEND_HOLD_FEATURE_FLAG_KEY } from "@botiverse/raft-shared";
+import { useHeldPreviewHydration } from "../../store/heldPreviews";
 import { activeAreaSection, ChannelSideFloatSlot, SideArtifactPortal, SideSectionPortal, useSideSections } from "../../components/task/ChannelSideArea";
 import type { SideAreaArtifact } from "../../components/task/ChannelSideArea";
 import { getHistoryTopState, historyBoundaryVariant } from "../../utils/historyTopState";
@@ -272,6 +274,9 @@ export function ChatPanel({
   // Members, notification settings, read receipts: after the first page (task #17), and after a join's idle (joinDeferred).
   const channelFirstPageSettled = useChannelFirstPageSettled(channelId);
   const joinDeferred = useJoinDeferred(channelId);
+  // Send hold: sends still waiting here, after a reload or reconnect.
+  const sendHoldEnabled = useServerFeatureFlag(SEND_HOLD_FEATURE_FLAG_KEY).enabled;
+  useHeldPreviewHydration(channelFirstPageSettled ? channelId : null, sendHoldEnabled);
   useReadReceiptHydrate(channelFirstPageSettled ? channel : null);
   const messageRenderScope = useContext(ChatPanelMessageRenderScope);
   const messages = useMessageStore((s) => selectChannelMessageBucket(s, channelId));

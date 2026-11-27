@@ -13,6 +13,7 @@ import { applyReadStateUpdate } from "./applyReadStateUpdate";
  * contain business logic beyond adaptation (that lives in reducers).
  */
 
+import { HELD_PREVIEW_SOCKET_BINDINGS, noteDeliveredSend, rehydrateWatchedHeldPreviews } from "./heldPreviews";
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import type { NavigateFunction } from "react-router-dom";
@@ -169,6 +170,8 @@ const STATUS_RECONCILE_INTERVAL_MS = 600_000;
 export const MAIN_LAYOUT_SOCKET_EVENT_NAMES = [
   "message:new",
   "message:updated",
+  "message:held",
+  "message:held_removed",
   "scope_read:updated",
   "read_state:updated",
   "read_state:updated_bulk",
@@ -827,6 +830,7 @@ export function buildMainLayoutSocketBindings(
   );
 
   const messageNew = (msg: Message) => {
+    noteDeliveredSend(msg.channelId, msg.randomId); // send hold: a later snapshot must not bring its preview back
     const messageStore = useMessageStore.getState();
     const accepted = !messageStore.channelMessages[msg.channelId]?.some((existing) => existing.id === msg.id);
     messageStore.addMessage(msg, "channel-room");
@@ -1488,6 +1492,7 @@ export function buildMainLayoutSocketBindings(
 
   const roomsJoined = () => {
     noteRoomsJoinDegraded(false);
+    rehydrateWatchedHeldPreviews(); // send hold: what waited while the rooms were away
     cancelBootUnreadFallback();
     if (typeof window !== "undefined") {
       (window as Window & { __slockRoomsJoined?: boolean }).__slockRoomsJoined =
@@ -1561,6 +1566,7 @@ export function buildMainLayoutSocketBindings(
 
   return [
     { event: "message:new", handler: messageNew },
+    ...HELD_PREVIEW_SOCKET_BINDINGS, // send hold
     { event: "message:updated", handler: messageUpdated },
     // Workspace Artifacts S5: refetch the message so `savedAsArtifact` is this viewer's (flag-gated inside).
     // Loaded when the event comes, not with the bridge: the handler reaches the Artifacts app through its

@@ -148,6 +148,11 @@ export const SHORTCUT_COMMANDS: readonly ShortcutCommand[] = [
   { id: "send", group: "message-box", scope: "composer", defaults: { all: [MOD_ENTER] }, label: "keyboardShortcuts.send", where: "keyboardShortcuts.send.where", rebindable: false, handler: `${WEB}/features/composer/MessageInput.tsx` },
   { id: "send-as-task", group: "message-box", scope: "composer", defaults: { all: [SEND_AS_TASK_SHORTCUT] }, label: "keyboardShortcuts.sendAsTask", where: "keyboardShortcuts.sendAsTask.where", rebindable: true, eitherMod: true, handler: `${WEB}/features/composer/MessageInput.tsx` },
   { id: "undo-mention", group: "message-box", scope: "composer", defaults: { all: [{ mod: true, key: "Z" }] }, label: "keyboardShortcuts.undoMention", where: "keyboardShortcuts.undoMention.where", rebindable: false, eitherMod: true, handler: `${WEB}/features/composer/MessageInput.tsx` },
+  // Send hold: the send key's own keys, only in an empty box with your message waiting
+  // (anything in the box: they do what they did). With ⌘/Ctrl+Enter sending, ⌘/Ctrl+Enter and ⌘/Ctrl+Backspace
+  // (keyboardShortcutList MOD_ENTER_SEND_ROWS). Matched in MessageInput.
+  { id: "send-held-now", group: "message-box", scope: "composer", defaults: { all: [{ key: "Enter" }] }, label: "keyboardShortcuts.sendHeldNow", where: "keyboardShortcuts.withdrawHeldSend.where", rebindable: false, shadows: ["send"], handler: `${WEB}/features/composer/MessageInput.tsx` },
+  { id: "withdraw-held-send", group: "message-box", scope: "composer", defaults: { all: [{ key: "Backspace" }] }, label: "keyboardShortcuts.withdrawHeldSend", where: "keyboardShortcuts.withdrawHeldSend.where", rebindable: false, handler: `${WEB}/features/composer/MessageInput.tsx` },
 
   { id: "search-channel", group: "channels-threads", scope: "conversation", defaults: { all: [MOD_F] }, label: "keyboardShortcuts.searchChannel", where: "keyboardShortcuts.searchChannel.where", rebindable: true, handler: `${WEB}/features/channel/ChatPanel.tsx`, matches: isThreadSearchShortcut },
   { id: "search-thread", group: "channels-threads", scope: "thread", defaults: { all: [MOD_F] }, label: "keyboardShortcuts.searchThread", where: "keyboardShortcuts.searchThread.where", rebindable: true, handler: `${WEB}/features/thread/useThreadSearch.ts`, matches: isThreadSearchShortcut },

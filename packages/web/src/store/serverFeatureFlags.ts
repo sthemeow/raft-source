@@ -51,6 +51,7 @@ import {
   PUBLIC_SERVER_FEATURE_FLAG_KEY,
   QUOTE_REPLY_FEATURE_FLAG_KEY,
   REFERRAL_SOURCE_PROMPT_FEATURE_FLAG_KEY,
+  SEND_HOLD_FEATURE_FLAG_KEY,
   SERVER_LABS_UI_FEATURE_FLAG_KEY,
   SLACK_BRIDGE_FEATURE_FLAG_KEYS,
   WORKSPACE_ARTIFACTS_FEATURE_FLAG_KEY,
@@ -221,6 +222,9 @@ const SERVER_FEATURE_FLAG_REGISTRY = {
   // use one kind), where the Computer also advertises the Claude driver. Off:
   // nothing new on the card; the server refuses Claude resets too.
   claudeLimitReset: CLAUDE_LIMIT_RESET_FEATURE_FLAG_KEY,
+  // Send hold (shared sendHold.ts): Settings › Appearance ›
+  // Send. Off: no row; the server holds nothing whatever a send asks.
+  sendHold: SEND_HOLD_FEATURE_FLAG_KEY,
   deepLinks: DEEP_LINKS_FLAG_KEY,
   // External channel invites (#wg-rbac:#16), read for the channel's host
   // Server: Add External Member, the Invited group, the External sidebar label.

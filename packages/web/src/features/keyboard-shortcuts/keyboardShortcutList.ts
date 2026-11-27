@@ -83,11 +83,14 @@ export { assistantOtterCombo } from "../shortcuts/overridesState";
  * is the only key that sends.
  */
 /** The message box rows whose keys depend on the send key. */
-type SendKeyRowId = "new-line" | "send";
+type SendKeyRowId = "new-line" | "send" | "send-held-now" | "withdraw-held-send";
 
 const MOD_ENTER_SEND_ROWS: Readonly<Record<SendKeyRowId, Pick<ShortcutRow, "keys" | "where">>> = {
   "new-line": { keys: [{ key: "Enter" }, SHIFT_ENTER], where: "keyboardShortcuts.newLine.whereModEnter" },
   send: { keys: [MOD_ENTER], where: "keyboardShortcuts.send.whereModEnter" },
+  // Send hold: the send key's keys.
+  "send-held-now": { keys: [MOD_ENTER], where: "keyboardShortcuts.withdrawHeldSend.where" },
+  "withdraw-held-send": { keys: [{ mod: true, key: "Backspace" }], where: "keyboardShortcuts.withdrawHeldSend.where" },
 };
 
 function isSendKeyRowId(id: string): id is SendKeyRowId {

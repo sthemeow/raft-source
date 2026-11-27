@@ -427,6 +427,7 @@ async function retireOneDueAccount(
     assistantOtterVisible: true,
     assistantOtterShortcut: null,
     composerSendKey: null,
+    sendHoldSeconds: null,
     shortcutOverrides: null,
     // `password_hash` is NOT NULL: an unknowable random hash, as for a social-only signup.
     passwordHash: placeholderPasswordHash,

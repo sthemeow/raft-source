@@ -429,6 +429,7 @@ export * from "./inboxRefreshTrigger";
 export * from "./railTabOrder";
 export * from "./assistantOtterShortcut";
 export * from "./composerSendKey";
+export * from "./sendHold";
 export * from "./shortcutOverrides";
 export * from "./channelPermissions";
 export * from "./channelAnnouncement";

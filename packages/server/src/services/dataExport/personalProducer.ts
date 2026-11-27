@@ -294,6 +294,7 @@ async function accountBatch(job: Job): Promise<DataExportBatch<PersonalExportCur
       timeFormat: user.preferredTimeFormat,
       messageBodyFontSize: user.preferredMessageBodyFontSize,
       composerSendKey: user.composerSendKey,
+      sendHoldSeconds: user.sendHoldSeconds,
       shareUsageData: user.shareUsageData,
       productAnalyticsOptedOutAt: isoOf(user.analyticsOptedOutAt),
       notifications: notification ? {

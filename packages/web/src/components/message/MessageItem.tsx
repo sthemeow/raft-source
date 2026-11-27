@@ -1,4 +1,5 @@
 import { ArtifactMessageRefs, ArtifactSavedAttachments, useArtifactAttachmentMenu } from "../../apps/artifacts";
+import { HeldSendWithdraw } from "./HeldSendWithdraw";
 import { ProfileDescription } from "./ProfileDescription";
 import { channelAnnouncementNoticeLine } from "../channel/channelAnnouncementNotice";
 import { trackMessageAction, messageMenuSurface } from "../../analytics/entries";
@@ -121,6 +122,7 @@ import type {
   parseRaftPermalink,
 } from "@botiverse/raft-shared";
 import { useMessageStore } from "../../store/messageStore";
+import { HELD_PREVIEW_ID_PREFIX } from "../../store/heldPreviews";
 import type { Message, MessageAttachment, MessageMention } from "../../store/messageStore";
 import { readHistoryLimitedError } from "../../store/hiddenHistoryStore";
 import type { ContextCanonicalTarget } from "../../store/hiddenHistoryStore";
@@ -1872,7 +1874,10 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
     [rawMessage, retracted],
   );
   const canReact = canReactProp && !retracted;
-  const actionable = !readOnlyProjection && !retracted;
+  // Send hold: waiting to be delivered. Not a message yet:
+  // no actions; the sender's own row (its send in this tab) can be withdrawn.
+  const held = message.held;
+  const actionable = !readOnlyProjection && !retracted && !held;
   // Task v2 (the caller passes linkedTasks only with the flag on): every task
   // linked to the message renders as the list under it, one included — old
   // tasks whose title is the message itself too (@stdrc). Without it, the
@@ -4286,8 +4291,19 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
               {formatMessage({ id: "message.messageItem.converting" })}
             </MessageItemInlineStatus>
           )}
+          {held && (
+            <MessageItemInlineStatus render={<span />} data-testid="held-send-status">
+              {formatMessage({ id: "message.messageItem.sending" })}
+            </MessageItemInlineStatus>
+          )}
           </MessageItemHeader>
         )}
+        {/* Send hold: a grouped row has no header, so its Sending… goes here. */}
+        {held && groupState?.showName === false && !showSelectedGroupedHeader ? (
+          <MessageItemInlineStatus render={<span />} data-testid="held-send-status">
+            {formatMessage({ id: "message.messageItem.sending" })}
+          </MessageItemInlineStatus>
+        ) : null}
         <AttachmentCommentRefChip
           commentRef={message.commentRef}
           onJumpToHost={handleJumpToCommentHost}
@@ -4310,7 +4326,7 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
           data-quote-author-type={quoteAuthorType}
           data-quote-created-at={message.createdAt}
           data-message-font-size={messageBodyFontSize}
-          className={`${messageBodyFontSizeClass}${followedBy && !inlineReplySurfaceReplacesBadge ? ` ${FOLLOWED_BODY_ENDING}` : ""}`}
+          className={`${messageBodyFontSizeClass}${followedBy && !inlineReplySurfaceReplacesBadge ? ` ${FOLLOWED_BODY_ENDING}` : ""}${held ? " text-foreground-hint transition-colors" : ""}`}
           style={messageBodyFontSizeStyle}
         >
           {(() => {
@@ -4418,6 +4434,14 @@ const ConnectedMessageItem = memo(function ConnectedMessageItem({ message: rawMe
         ) : null}
         </CollapsibleMessageContent>
         </MessageLinkCardsProvider>
+        {held && message.randomId && message.senderId === currentUser?.id ? (
+          <HeldSendWithdraw
+            randomId={message.randomId}
+            createdAt={held.createdAt}
+            releaseAt={held.releaseAt}
+            restore={message.id.startsWith(HELD_PREVIEW_ID_PREFIX) ? { channelId: message.channelId, content: message.content } : undefined}
+          />
+        ) : null}
         {/* Attached files */}
         {message.attachments && message.attachments.length > 0 ? (
           <ScreenshotAttachmentSummary attachments={message.attachments} />

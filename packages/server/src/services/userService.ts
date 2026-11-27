@@ -14,7 +14,7 @@ import { assertRegistrationEnabled } from "./registrationPolicy";
 import type { SocialAuthProfile, SocialAuthProvider } from "./socialAuthService";
 import * as legalAcceptanceService from "./legalAcceptanceService";
 import { DEPRECATED_GRAVATAR_HASH, currentDate, isReservedAgentName, normalizeRailTabOrder, normalizeShortcutOverrides, validateName } from "@botiverse/raft-shared";
-import type { StoredComposerSendKey, StoredShortcutOverrides } from "@botiverse/raft-shared";
+import type { StoredComposerSendKey, StoredSendHoldSeconds, StoredShortcutOverrides } from "@botiverse/raft-shared";
 import { createSession, denyLoginCodesApprovedBy, revokeAllUserSessionsInTransaction } from "./sessionService";
 import { revokeKeysOfRevokedDeviceSessions } from "./deviceSessionKeys";
 import type { ApproverSessionRevokeTrigger } from "./approverSessionGrants";
@@ -57,6 +57,7 @@ function toPublicUser(user: {
   assistantOtterVisible?: boolean | null;
   assistantOtterShortcut?: string | null;
   composerSendKey?: StoredComposerSendKey;
+  sendHoldSeconds?: StoredSendHoldSeconds;
   shortcutOverrides?: StoredShortcutOverrides | null;
   shareUsageData?: boolean | null;
   referralSource?: string | null;
@@ -102,6 +103,8 @@ function toPublicUser(user: {
     assistantOtterShortcut: user.assistantOtterShortcut ?? null,
     // #triage:#210: how the message box sends (null = Enter, the default).
     composerSendKey: user.composerSendKey ?? null,
+    // how long a sent message waits before delivery (null = the default, 0 = off).
+    sendHoldSeconds: user.sendHoldSeconds ?? null,
     // #proj-frontend:#37: the keyboard shortcuts the person changed (null = every default).
     shortcutOverrides: user.shortcutOverrides == null ? null : normalizeShortcutOverrides(user.shortcutOverrides),
     // RFC-067 "Share usage data"; null = not chosen yet.
@@ -705,6 +708,7 @@ export async function getUser(userId: string, options: { withDesktopAppHint?: bo
     assistantOtterVisible: users.assistantOtterVisible,
     assistantOtterShortcut: users.assistantOtterShortcut,
     composerSendKey: users.composerSendKey,
+    sendHoldSeconds: users.sendHoldSeconds,
     shortcutOverrides: users.shortcutOverrides,
     referralSource: users.referralSource,
     referralSourceOther: users.referralSourceOther,
@@ -752,6 +756,7 @@ export async function getUserByEmail(email: string) {
     assistantOtterVisible: users.assistantOtterVisible,
     assistantOtterShortcut: users.assistantOtterShortcut,
     composerSendKey: users.composerSendKey,
+    sendHoldSeconds: users.sendHoldSeconds,
     shortcutOverrides: users.shortcutOverrides,
     referralSource: users.referralSource,
     referralSourceOther: users.referralSourceOther,
@@ -784,6 +789,7 @@ export type UserUpdateFields = {
   assistantOtterVisible?: boolean;
   assistantOtterShortcut?: string | null;
   composerSendKey?: StoredComposerSendKey;
+  sendHoldSeconds?: StoredSendHoldSeconds;
   shortcutOverrides?: StoredShortcutOverrides | null;
   shareUsageData?: boolean | null;
   referralSource?: string | null;
@@ -957,6 +963,7 @@ async function getPublicUserByIdTx(database: DatabaseExecutor, userId: string) {
     assistantOtterVisible: users.assistantOtterVisible,
     assistantOtterShortcut: users.assistantOtterShortcut,
     composerSendKey: users.composerSendKey,
+    sendHoldSeconds: users.sendHoldSeconds,
     shortcutOverrides: users.shortcutOverrides,
     referralSource: users.referralSource,
     referralSourceOther: users.referralSourceOther,

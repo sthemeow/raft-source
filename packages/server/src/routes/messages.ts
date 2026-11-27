@@ -2,7 +2,9 @@ import { JointChannelAccessChangedError } from "../lib/channelActorPermissions";
 import { refuse, type RefusalInput } from "../lib/refusal";
 import { EMOJI_INVALID_REFUSAL } from "./agentRouteRefusals";
 import { DmPeerNotMemberError } from "../services/dmSendPolicy";
-import { hasSameConversationQuoteRef, isMessageCardMetadata, isSubConversationType } from "@botiverse/raft-shared";
+import { hasSameConversationQuoteRef, isMessageCardMetadata, isSubConversationType, asServerId, normalizeSendHoldSeconds, SEND_HOLD_FEATURE_FLAG_KEY, SEND_HOLD_WITHDRAWN_CODE } from "@botiverse/raft-shared";
+import { appEnabled } from "../platform/flags";
+import { holdAndAwaitSend, listHeldPreviews, sendHeldNow, SendWithdrawnError, withdrawHeldSend } from "../services/sendHoldService";
 import { attachResolvedInlineQuotesForViewer, resolveInlineQuotesMapForViewer } from "../services/quoteReplyService";
 import { listMessageCardRevisions } from "../services/messageCardService";
 import { getTaskForConversationChannel } from "../services/taskConversationService";
@@ -1914,9 +1916,9 @@ async function createHumanMessage(
     const io = req.app.get("io");
     const agentOrchestrator = req.app.get("agentOrchestrator") as AgentOrchestrator;
     // slack-bridge-ordinary-message-producer: messages.create
-    const enriched = await messageService.broadcastAndDeliver(io, agentOrchestrator, {
+    const sendInput = {
       channelId,
-      senderType: "user",
+      senderType: "user" as const,
       senderId: userId,
       senderName,
       content,
@@ -1926,7 +1928,20 @@ async function createHumanMessage(
       asTask,
       mentionContract,
       senderTimezone,
-    });
+    };
+    // Send hold: only the web composer asks (`hold: true`),
+    // with a randomId to withdraw it by; the request answers once the message
+    // is released (or 409 send_withdrawn).
+    const holdSeconds = req.body?.hold === true && randomId
+      ? normalizeSendHoldSeconds(user?.sendHoldSeconds ?? null)
+      : 0;
+    const enriched = randomId && holdSeconds > 0 && await appEnabled(asServerId(req.serverId!), SEND_HOLD_FEATURE_FLAG_KEY)
+      ? await holdAndAwaitSend({
+        serverId: req.serverId!,
+        seconds: holdSeconds,
+        payload: { ...sendInput, randomId },
+      })
+      : await messageService.broadcastAndDeliver(io, agentOrchestrator, sendInput);
 
     if (mentions.some((m) => m.type === "agent")) {
       const io2 = req.app.get("io");
@@ -1985,6 +2000,10 @@ async function createHumanMessage(
       refuse(res, 400, { code: err.code ?? "mention_binding_conflict", error: err.message });
       return;
     }
+    if (err instanceof SendWithdrawnError) {
+      res.status(err.status).json({ error: err.message, code: SEND_HOLD_WITHDRAWN_CODE });
+      return;
+    }
     if (err instanceof messageService.UserRandomIdConflictError) {
       res.status(err.status).json({ error: err.message, code: err.code });
       return;
@@ -2000,6 +2019,85 @@ async function createHumanMessage(
     });
   }
 }
+
+/**
+ * Send hold: the sender takes back their message still
+ * waiting to be delivered, by the randomId it was sent with. 200
+ * `{ withdrawn: true }`; 409 `send_already_released` when it is already on its
+ * way (it stays sent). The waiting send request answers 409 send_withdrawn.
+ */
+/**
+ * Send hold: the sends still waiting in a conversation the
+ * caller can read, as message:held previews. A page opened or reconnected
+ * during the wait reads them here; the live events take it from there.
+ */
+messageV2Router.get("/held", async (req, res) => {
+  const channelId = typeof req.query.channelId === "string" ? req.query.channelId : "";
+  if (!channelId) {
+    refuse(res, 400, { code: "invalid_request", error: "channelId is required" });
+    return;
+  }
+  try {
+    if (!await appEnabled(asServerId(req.serverId!), SEND_HOLD_FEATURE_FLAG_KEY)) {
+      res.json({ held: [] });
+      return;
+    }
+    const channel = await channelService.getChannel(channelId);
+    if (!channel || channel.serverId !== req.serverId
+      || !await channelService.canUserAccessChannel(channelId, req.userId!, req.serverId!)) {
+      res.json({ held: [] });
+      return;
+    }
+    res.json({ held: await listHeldPreviews(channelId) });
+  } catch (err) {
+    console.error("[send-hold] listing held sends failed:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "Failed to list waiting messages" });
+  }
+});
+
+messageV2Router.post("/held/withdraw", async (req, res) => {
+  const randomId = parseRandomId(req.body?.randomId);
+  if (!randomId || randomId === INVALID_RANDOM_ID) {
+    refuse(res, 400, { code: "invalid_request", error: "randomId is required" });
+    return;
+  }
+  try {
+    const { withdrawn } = await withdrawHeldSend(req.userId!, randomId);
+    if (!withdrawn) {
+      refuse(res, 409, { code: "send_already_released", error: "The message is already sent" });
+      return;
+    }
+    res.json({ withdrawn: true });
+  } catch (err) {
+    console.error("[send-hold] withdraw failed:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "Failed to withdraw the message" });
+  }
+});
+
+/**
+ * Send hold: the sender sends their waiting message now
+ * ("Send now"), by the randomId it was sent with. 200 `{ sent: true }` once it
+ * is delivered; 409 `send_already_released` when nothing of theirs waits by
+ * that id (already on its way, or withdrawn).
+ */
+messageV2Router.post("/held/send-now", async (req, res) => {
+  const randomId = parseRandomId(req.body?.randomId);
+  if (!randomId || randomId === INVALID_RANDOM_ID) {
+    refuse(res, 400, { code: "invalid_request", error: "randomId is required" });
+    return;
+  }
+  try {
+    const { sent } = await sendHeldNow(req.userId!, randomId);
+    if (!sent) {
+      refuse(res, 409, { code: "send_already_released", error: "The message is already sent or withdrawn" });
+      return;
+    }
+    res.json({ sent: true });
+  } catch (err) {
+    console.error("[send-hold] send now failed:", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "Failed to send the message now" });
+  }
+});
 
 messageRouter.post("/", (req, res) => createHumanMessage(req, res, "v1"));
 messageV2Router.post("/", (req, res) => createHumanMessage(req, res, "v2"));
