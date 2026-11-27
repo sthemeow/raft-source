@@ -28,6 +28,7 @@ import {
   getRisingWaveInboxItemsServingVersion,
   getRisingWavePool,
   getRisingWavePoolState,
+  isPostgresInboxBackendConfigured,
   RisingWaveNotConfiguredError,
   queryRisingWave,
   RISINGWAVE_UNREAD_INBOX_CONTRACT_VERSION,
@@ -49,6 +50,14 @@ import {
   type SidebarUnreadTotalsQuery,
 } from "./conversationUnreadSource";
 import { getActivityReadSourceOverride } from "./activityReadSource";
+import {
+  computePostgresAgentInboxChainTotals,
+  filterPostgresAgentInboxChainRows,
+  postgresActivityReadSource,
+  postgresAgentInboxChain,
+  postgresConversationUnreadSource,
+  readPostgresAgentInboxChainTargetSeqs,
+} from "./postgresInboxBackend";
 import {
   listSlackPairHeadsForHealth, SLACK_PAIR_HEAD_BATCH_SIZE, slackPairOutboundHold, type SlackPairOutboundHold,
 } from "./slackBridgePairQueue";
@@ -12198,7 +12207,7 @@ async function getFollowedThreadStatsRows(
     return getFollowedThreadStatsFromPostgres(userId, threads, historyCutoff, traceQuery, "activity_upper_bound");
   }
 
-  const override = getActivityReadSourceOverride();
+  const override = getActivityReadSourceOverride() ?? (usePostgresInboxBackend() ? postgresActivityReadSource : null);
   if (override) return override.followedThreadStats({ serverId, userId, threads, traceQuery });
 
   // RisingWave only, for every follow state: unconfigured or a failed read errors.
@@ -13111,7 +13120,7 @@ async function readFollowedThreadRwRows(
   userId: string,
   traceQuery: DbQueryTracer,
 ): Promise<FollowedThreadRwRow[]> {
-  const override = getActivityReadSourceOverride();
+  const override = getActivityReadSourceOverride() ?? (usePostgresInboxBackend() ? postgresActivityReadSource : null);
   if (override) return override.followedThreadRows({ serverId, userId, traceQuery });
   const pool = getRisingWaveInboxPool();
   if (!pool) throw new RisingWaveNotConfiguredError("followed threads");
@@ -14584,16 +14593,25 @@ export const __testRisingWaveInbox = {
   },
 };
 
+function hasRisingWaveInboxTestOverride(): boolean {
+  return risingWaveInboxTestOverrides.getPool !== undefined || risingWaveInboxTestOverrides.query !== undefined;
+}
+
+function usePostgresInboxBackend(): boolean {
+  return !hasRisingWaveInboxTestOverride() && isPostgresInboxBackendConfigured();
+}
+
 function getRisingWaveInboxPool() {
   return (risingWaveInboxTestOverrides.getPool ?? getRisingWavePool)();
 }
 
 /**
  * Whether a non-guest's Activity read is served by RisingWave here (or, in
- * tests, by its installed stand-in): false when RisingWave is not configured.
+ * tests, by its installed stand-in, or by RAFT_INBOX_BACKEND=postgres): false
+ * when RisingWave is not configured.
  */
 export function activityReadServedByRisingWave(): boolean {
-  return getActivityReadSourceOverride() !== null || getRisingWaveInboxPool() !== null;
+  return getActivityReadSourceOverride() !== null || usePostgresInboxBackend() || getRisingWaveInboxPool() !== null;
 }
 
 function queryRisingWaveInbox<T extends QueryResultRow = QueryResultRow>(
@@ -15750,7 +15768,7 @@ export async function getActivityUnreadTotalsBatch(
   const traceQuery = opts.traceQuery ?? untracedDbQuery;
   const uniqueInputs = [...new Map(inputs.map((input) => [input.serverId, input])).values()];
   if (uniqueInputs.length === 0) return new Map();
-  const override = getActivityReadSourceOverride();
+  const override = getActivityReadSourceOverride() ?? (usePostgresInboxBackend() ? postgresActivityReadSource : null);
   if (override) return override.activityUnreadTotals(uniqueInputs, userId, { traceQuery });
   // Totals come from the SAME materialized view family as the Activity list —
   // one source, watermark included, so the historical cross-surface divergence
@@ -16384,6 +16402,7 @@ async function readInboxItems(
     const override = getActivityReadSourceOverride();
     // The test-only stand-in for the RisingWave reads.
     if (override) return { ...(await override.inboxItems(serverId, userId, { ...opts, q })), backend: "risingwave" };
+    if (usePostgresInboxBackend()) return postgresActivityReadSource.inboxItems(serverId, userId, { ...opts, q });
     const risingWaveResult = await getInboxItemsFromRisingWave(serverId, userId, {
       filter,
       limit,
@@ -18761,7 +18780,7 @@ function nullableText(value: unknown): string | null {
 async function readConversationUnreadSummaryRows(
   query: ConversationUnreadSummaryQuery,
 ): Promise<ConversationUnreadRead<ConversationUnreadRow[]>> {
-  const override = getConversationUnreadSourceOverride();
+  const override = getConversationUnreadSourceOverride() ?? (usePostgresInboxBackend() ? postgresConversationUnreadSource : null);
   if (override) return { rows: await override.summaryRows(query), rwAttrs: {} };
   const pool = getRisingWaveInboxPool();
   if (!pool) throw new RisingWaveNotConfiguredError("sidebar unread");
@@ -18828,7 +18847,7 @@ async function readConversationUnreadSummaryRows(
 async function readSidebarUnreadTotals(
   query: SidebarUnreadTotalsQuery,
 ): Promise<ConversationUnreadRead<Array<{ serverId: string; unreadCount: number }>>> {
-  const override = getConversationUnreadSourceOverride();
+  const override = getConversationUnreadSourceOverride() ?? (usePostgresInboxBackend() ? postgresConversationUnreadSource : null);
   if (override) return { rows: await override.sidebarTotals(query), rwAttrs: {} };
   const pool = getRisingWaveInboxPool();
   if (!pool) throw new RisingWaveNotConfiguredError("sidebar unread totals");
@@ -19587,6 +19606,14 @@ function toNullableNumber(value: unknown): number | null {
  * no second source to fall back to.
  */
 export async function selectAgentInboxChainRows(agentId: string): Promise<AgentInboxChainSelection> {
+  if (usePostgresInboxBackend()) {
+    try {
+      return { source: "chain", rows: await postgresAgentInboxChain(agentId) };
+    } catch (error) {
+      console.error(`[ChannelService] agent inbox chain read failed for agent ${agentId}; skipping resume recovery:`, error);
+      return { source: "unavailable", reason: "rw_error" };
+    }
+  }
   const pool = getRisingWaveInboxPool();
   if (!pool) return { source: "unavailable", reason: "rw_unconfigured" };
   try {
@@ -19752,6 +19779,9 @@ export async function readAgentInboxChainTargetSeqs(
   agentId: string,
   targetIds: readonly string[],
 ): Promise<AgentInboxChainSeqRow[] | null> {
+  if (usePostgresInboxBackend()) {
+    return readPostgresAgentInboxChainTargetSeqs(agentId, targetIds);
+  }
   const pool = getRisingWaveInboxPool();
   if (!pool) return null;
   if (targetIds.length === 0) return [];
@@ -20126,15 +20156,23 @@ export async function listAgentInboxWithShownTargets(
   /** The chain rows behind `list.items`, in the same order (RFC 081 rows read their first unread and preview from them). */
   pageRows: AgentInboxChainRow[];
 }> {
-  const pool = getRisingWaveInboxPool();
-  if (!pool) throw new AgentInboxUnavailableError("Agent inbox source is not configured");
+  const pgBackend = usePostgresInboxBackend();
+  const pool = pgBackend ? null : getRisingWaveInboxPool();
+  if (!pgBackend && !pool) throw new AgentInboxUnavailableError("Agent inbox source is not configured");
   let totals: AgentInboxTotals;
   let dmRows: AgentInboxChainRow[];
+  let allPostgresRows: AgentInboxChainRow[] | null = null;
   try {
-    [totals, dmRows] = await Promise.all([
-      readAgentInboxChainTotals(pool, agentId),
-      readAgentInboxChainRows(pool, agentId, { kind: "dm" }),
-    ]);
+    if (pgBackend) {
+      allPostgresRows = await postgresAgentInboxChain(agentId);
+      totals = computePostgresAgentInboxChainTotals(allPostgresRows);
+      dmRows = filterPostgresAgentInboxChainRows(allPostgresRows, { kind: "dm" });
+    } else {
+      [totals, dmRows] = await Promise.all([
+        readAgentInboxChainTotals(pool!, agentId),
+        readAgentInboxChainRows(pool!, agentId, { kind: "dm" }),
+      ]);
+    }
   } catch (error) {
     throw new AgentInboxUnavailableError("Agent inbox source read failed", { cause: error });
   }
@@ -20153,12 +20191,18 @@ export async function listAgentInboxWithShownTargets(
 
   let rows: AgentInboxChainRow[];
   try {
-    rows = await readAgentInboxChainRows(pool, agentId, {
-      beforeSeq: opts.beforeSeq,
-      mentionsOnly: opts.view === "mentions",
-      // One past the page says whether there is more; the hidden DMs may take slots.
-      limit: opts.limit + 1 + hidden.size,
-    });
+    rows = allPostgresRows !== null
+      ? filterPostgresAgentInboxChainRows(allPostgresRows, {
+          beforeSeq: opts.beforeSeq,
+          mentionsOnly: opts.view === "mentions",
+          limit: opts.limit + 1 + hidden.size,
+        })
+      : await readAgentInboxChainRows(pool!, agentId, {
+          beforeSeq: opts.beforeSeq,
+          mentionsOnly: opts.view === "mentions",
+          // One past the page says whether there is more; the hidden DMs may take slots.
+          limit: opts.limit + 1 + hidden.size,
+        });
   } catch (error) {
     throw new AgentInboxUnavailableError("Agent inbox source read failed", { cause: error });
   }
@@ -20289,8 +20333,9 @@ export async function listAgentInboxRowsForTargets(
   behind: number;
   otherUnread: { conversations: number; messages: number; mentions: number; dms: number };
 }> {
-  const pool = getRisingWaveInboxPool();
-  if (!pool) throw new AgentInboxUnavailableError("Agent inbox source is not configured");
+  const pgBackend = usePostgresInboxBackend();
+  const pool = pgBackend ? null : getRisingWaveInboxPool();
+  if (!pgBackend && !pool) throw new AgentInboxUnavailableError("Agent inbox source is not configured");
   const newestSeqByTarget = new Map<string, number>();
   for (const target of targets) {
     newestSeqByTarget.set(target.channelId, Math.max(target.newestSeq, newestSeqByTarget.get(target.channelId) ?? 0));
@@ -20299,11 +20344,18 @@ export async function listAgentInboxRowsForTargets(
   let dmRows: AgentInboxChainRow[];
   let targetRows: AgentInboxChainRow[];
   try {
-    [totals, dmRows, targetRows] = await Promise.all([
-      readAgentInboxChainTotals(pool, agentId),
-      readAgentInboxChainRows(pool, agentId, { kind: "dm" }),
-      readAgentInboxChainRows(pool, agentId, { targetIds: [...newestSeqByTarget.keys()] }),
-    ]);
+    if (pgBackend) {
+      const allRows = await postgresAgentInboxChain(agentId);
+      totals = computePostgresAgentInboxChainTotals(allRows);
+      dmRows = filterPostgresAgentInboxChainRows(allRows, { kind: "dm" });
+      targetRows = filterPostgresAgentInboxChainRows(allRows, { targetIds: [...newestSeqByTarget.keys()] });
+    } else {
+      [totals, dmRows, targetRows] = await Promise.all([
+        readAgentInboxChainTotals(pool!, agentId),
+        readAgentInboxChainRows(pool!, agentId, { kind: "dm" }),
+        readAgentInboxChainRows(pool!, agentId, { targetIds: [...newestSeqByTarget.keys()] }),
+      ]);
+    }
   } catch (error) {
     throw new AgentInboxUnavailableError("Agent inbox source read failed", { cause: error });
   }
@@ -20351,15 +20403,24 @@ export async function readAgentInboxChainRowsForDismiss(
   agentId: string,
   opts: { beforeSeq: number; limit: number } | { targetIds: readonly string[] },
 ): Promise<AgentInboxChainRow[]> {
-  const pool = getRisingWaveInboxPool();
-  if (!pool) throw new AgentInboxUnavailableError("Agent inbox source is not configured");
+  const pgBackend = usePostgresInboxBackend();
+  const pool = pgBackend ? null : getRisingWaveInboxPool();
+  if (!pgBackend && !pool) throw new AgentInboxUnavailableError("Agent inbox source is not configured");
   let rows: AgentInboxChainRow[];
   try {
     if ("targetIds" in opts) {
       const wanted = new Set(opts.targetIds);
-      rows = wanted.size === 0 ? [] : (await readAgentInboxChainRows(pool, agentId)).filter((row) => wanted.has(row.targetId));
+      if (wanted.size === 0) {
+        rows = [];
+      } else if (pgBackend) {
+        rows = filterPostgresAgentInboxChainRows(await postgresAgentInboxChain(agentId), { targetIds: opts.targetIds });
+      } else {
+        rows = (await readAgentInboxChainRows(pool!, agentId)).filter((row) => wanted.has(row.targetId));
+      }
     } else {
-      rows = await readAgentInboxChainRows(pool, agentId, { beforeSeq: opts.beforeSeq, limit: opts.limit });
+      rows = pgBackend
+        ? filterPostgresAgentInboxChainRows(await postgresAgentInboxChain(agentId), { beforeSeq: opts.beforeSeq, limit: opts.limit })
+        : await readAgentInboxChainRows(pool!, agentId, { beforeSeq: opts.beforeSeq, limit: opts.limit });
     }
   } catch (error) {
     throw new AgentInboxUnavailableError("Agent inbox source read failed", { cause: error });

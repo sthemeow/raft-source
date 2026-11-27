@@ -228,10 +228,32 @@ export function getRisingWaveInboxRfc056ServingMode(
   return "off";
 }
 
+export type InboxBackend = "risingwave" | "postgres";
+
+/**
+ * Resolve which backend serves inbox/unread reads (`risingwave` default, or
+ * `postgres` via `RAFT_INBOX_BACKEND=postgres`). Throws on invalid values so a
+ * misconfigured deployment fails fast at startup.
+ */
+export function resolveInboxBackend(env: NodeJS.ProcessEnv = process.env): InboxBackend {
+  const raw = env.RAFT_INBOX_BACKEND?.trim().toLowerCase();
+  if (!raw || raw === "risingwave") return "risingwave";
+  if (raw === "postgres") return "postgres";
+  throw new Error(
+    `Invalid RAFT_INBOX_BACKEND=${JSON.stringify(env.RAFT_INBOX_BACKEND)}: expected "risingwave" or "postgres"`,
+  );
+}
+
+/** True when `RAFT_INBOX_BACKEND=postgres` explicitly routes inbox reads to PostgreSQL. */
+export function isPostgresInboxBackendConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.RAFT_INBOX_BACKEND?.trim().toLowerCase() === "postgres";
+}
+
 let _risingWavePool: pg.Pool | null = null;
 let _risingWaveUrl: string | null = null;
 
 export function getRisingWaveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (isPostgresInboxBackendConfigured(env)) return null;
   const value = env.RISINGWAVE_DATABASE_URL?.trim();
   return value ? value : null;
 }

@@ -154,7 +154,7 @@ import { startDrainCoordinator, type DrainSignalSourceName } from "./services/dr
 import { DEFAULT_DRAIN_CLOSE_SPREAD_MS, spreadClosesForDrain } from "./services/machineDrain";
 import { sharedSseStreamRegistry } from "./services/sseStreamRegistry";
 import { markDraining, setDrainRefusalSink } from "./services/drainState";
-import { isRisingWaveConfigured } from "./db/risingwave";
+import { isRisingWaveConfigured, resolveInboxBackend } from "./db/risingwave";
 import { DAEMON_CAPABILITY_AGENT_FOCUS_V1, warmContractSchemas } from "@botiverse/raft-shared";
 
 
@@ -215,11 +215,20 @@ try {
   process.exit(1);
 }
 
-// RisingWave is a hard dependency: Activity, followed-thread stats and sidebar
-// unread are served from it only, with no Postgres fallback. A production server
-// without it would fail those reads on every request, so refuse to start.
-if (process.env.NODE_ENV === "production" && !isRisingWaveConfigured()) {
-  console.error("RISINGWAVE_DATABASE_URL environment variable is required in production (RisingWave is a hard dependency)");
+// RisingWave is the default inbox/unread backend; `RAFT_INBOX_BACKEND=postgres`
+// explicitly routes those reads to PostgreSQL without connecting to RisingWave.
+let inboxBackend: ReturnType<typeof resolveInboxBackend>;
+try {
+  inboxBackend = resolveInboxBackend();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+}
+
+if (inboxBackend === "postgres") {
+  console.log("[Slock] Inbox backend: postgres (RAFT_INBOX_BACKEND=postgres; RisingWave disabled)");
+} else if (process.env.NODE_ENV === "production" && !isRisingWaveConfigured()) {
+  console.error("RISINGWAVE_DATABASE_URL environment variable is required in production unless RAFT_INBOX_BACKEND=postgres");
   process.exit(1);
 }
 
